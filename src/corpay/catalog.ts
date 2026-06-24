@@ -20,33 +20,52 @@ export interface Capability {
 }
 
 /**
- * Provisional Corpay One resource map.
+ * Corpay One resource map (informed by public docs; paths VERIFIED live).
  *
- * Corpay One exposes a REST API at https://api.corpayone.com (Swagger at /docs).
- * These resource names reflect the product's documented accounts-payable domain.
- * Exact paths, casing, and writable fields are VERIFIED during connector
- * bring-up via read-first live introspection before the write tools are enabled.
- * Treat this list as the allowlist seed, not a guarantee of upstream shape.
+ * Corpay One exposes a REST API at https://api.corpayone.com (Swagger at /docs,
+ * auth-gated). The product's core entity is the "expense" (an incoming bill or
+ * document awaiting coding and approval). Coding is split into a "category"
+ * (the GL account) and "labels" (configurable dimensions such as project and
+ * cost type). This resource list follows that documented domain model; exact
+ * paths, casing, and writable fields are VERIFIED via read-first live
+ * introspection during connector bring-up before write tools are enabled.
+ * Treat this as the allowlist seed, not a guarantee of upstream shape.
  */
 export const CORPAY_RESOURCES: Array<{ resource: string; writable: boolean }> = [
-  { resource: 'bills', writable: true }, // documents/invoices awaiting coding & approval
+  { resource: 'expenses', writable: true }, // bills/documents awaiting coding & approval
   { resource: 'vendors', writable: true },
-  { resource: 'categories', writable: false }, // GL accounts synced from the ledger
-  { resource: 'projects', writable: false },
-  { resource: 'cost-types', writable: false },
+  { resource: 'categories', writable: false }, // GL accounts/categories
+  { resource: 'labels', writable: false }, // dimensions (project, cost type, ...)
   { resource: 'documents', writable: true },
   { resource: 'payments', writable: false },
   { resource: 'webhooks', writable: true },
 ];
+
+/**
+ * Corpay One webhook event types (from the documented integration surface).
+ * Used to trigger downstream automation (e.g. code a freshly-added expense).
+ */
+export const WEBHOOK_EVENTS = [
+  'expense.added',
+  'expense.approved',
+  'expense.declined',
+  'expense.paid',
+  'expense.amount_updated',
+  'expense.amount_lines_updated',
+  'expense.category_updated',
+  'expense.label_updated',
+  'expense.note_updated',
+  'expense.date_updated',
+] as const;
 
 export const ENDPOINT_OPERATIONS: EndpointOperation[] = buildEndpointOperations();
 
 export const CURATED_CAPABILITIES: Capability[] = [
   tool('corpay_check_connection', 'Check Corpay One connection', 'Validate credentials and return account context.', 'read', ['auth', 'setup']),
   tool('corpay_search_capabilities', 'Search capabilities', 'Find supported tools and allowlisted endpoint operations.', 'read', ['discovery']),
-  tool('corpay_list_bills', 'List bills', 'List bills/documents, filterable by approval status.', 'read', ['bill', 'approval']),
-  tool('corpay_get_bill', 'Get bill', 'Read one bill including vendor, amounts, and line coding.', 'read', ['bill']),
-  tool('corpay_prepare_bill_coding', 'Prepare bill coding', 'Dry-run set of a bill’s project, cost type, and category/account.', 'draft', ['bill', 'coding', 'project', 'write']),
+  tool('corpay_list_expenses', 'List expenses', 'List expenses (bills/documents), filterable by approval status.', 'read', ['expense', 'bill', 'approval']),
+  tool('corpay_get_expense', 'Get expense', 'Read one expense including vendor, amounts, line items, and coding.', 'read', ['expense', 'bill']),
+  tool('corpay_prepare_expense_coding', 'Prepare expense coding', 'Dry-run set of an expense’s category (account) and labels (project, cost type).', 'draft', ['expense', 'coding', 'category', 'label', 'project', 'write']),
   tool('corpay_commit_prepared_operation', 'Commit prepared operation', 'Execute a prepared, policy-checked write with a confirmation hash.', 'commit', ['write']),
   tool('corpay_call_endpoint', 'Call allowlisted endpoint', 'Call a validated, allowlisted Corpay One endpoint (read unless policy permits).', 'read', ['advanced']),
 ];

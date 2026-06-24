@@ -37,12 +37,24 @@ environment only and never accepts credentials as tool arguments.
 export CORPAYONE_API_TOKEN="your-api-token"
 ```
 
+## Domain model
+
+Corpay One's core entity is the **expense** (an incoming bill/document awaiting
+coding and approval). Coding is split into a **category** (the GL account) and
+**labels** (configurable dimensions such as project and cost type). The connector
+follows this model; exact REST paths and field names are verified live during
+bring-up.
+
+Documented webhook events (usable to trigger downstream automation): `expense.added`,
+`expense.approved`, `expense.declined`, `expense.paid`, and `*_updated` variants
+for amount, line amounts, category, label, note, and date.
+
 ## Tools
 
 - `corpay_check_connection`
 - `corpay_search_capabilities`
-- `corpay_list_bills`
-- `corpay_prepare_bill_coding` → `corpay_commit_prepared_operation`
+- `corpay_list_expenses`
+- `corpay_prepare_expense_coding` → `corpay_commit_prepared_operation`
 - `corpay_call_endpoint` (allowlisted; read-only unless write policy permits)
 
 ## Write Policy
