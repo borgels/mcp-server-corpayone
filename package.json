@@ -1,0 +1,63 @@
+{
+  "name": "mcp-server-corpayone",
+  "version": "0.0.1",
+  "description": "Policy-aware MCP server for the Corpay One API.",
+  "type": "module",
+  "main": "./dist/transports/stdio.js",
+  "exports": {
+    ".": "./dist/transports/stdio.js",
+    "./gateway": {
+      "types": "./dist/gateway.d.ts",
+      "default": "./dist/gateway.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md",
+    ".env.example"
+  ],
+  "bin": {
+    "mcp-server-corpayone": "./dist/transports/stdio.js"
+  },
+  "scripts": {
+    "build": "tsup src/transports/stdio.ts src/gateway.ts --format esm --dts --clean --sourcemap",
+    "dev": "tsx src/transports/stdio.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepare": "npm run build",
+    "prepack": "npm run typecheck && npm test && npm run build"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/borgels/mcp-server-corpayone.git"
+  },
+  "keywords": [
+    "mcp",
+    "corpay",
+    "corpay-one",
+    "accounts-payable",
+    "bills"
+  ],
+  "author": "",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "bugs": {
+    "url": "https://github.com/borgels/mcp-server-corpayone/issues"
+  },
+  "homepage": "https://github.com/borgels/mcp-server-corpayone#readme",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.7.0",
+    "tsup": "^8.5.1",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.6"
+  }
+}
