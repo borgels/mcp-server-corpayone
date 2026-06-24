@@ -101,25 +101,25 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
   );
 
   server.registerTool(
-    'corpay_prepare_bill_coding',
+    'corpay_prepare_expense_coding',
     {
-      title: 'Prepare bill coding',
+      title: 'Prepare expense coding',
       description:
-        'Dry-run update of a bill’s coding (project, cost type, category/account). Returns an operationHash to commit. Does not call Corpay One until committed.',
+        'Dry-run update of an expense’s coding — category (GL account) and labels (project, cost type, ...). Returns an operationHash to commit. Does not call Corpay One until committed.',
       inputSchema: {
-        billId: z.union([z.string(), z.number()]),
+        expenseId: z.union([z.string(), z.number()]),
         body: z.unknown(),
         reason: z.string().trim().min(1),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    async ({ billId, body, reason }) =>
+    async ({ expenseId, body, reason }) =>
       jsonResult(
         prepareOperation({
-          capability: 'corpay_prepare_bill_coding',
+          capability: 'corpay_prepare_expense_coding',
           method: 'PATCH',
-          pathTemplate: '/bills/{id}',
-          pathParams: { id: billId },
+          pathTemplate: '/expenses/{id}',
+          pathParams: { id: expenseId },
           body,
           reason,
         }),
@@ -156,18 +156,23 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
 
   // Read helpers over the allowlisted endpoints, for ergonomic discovery.
   server.registerTool(
-    'corpay_list_bills',
+    'corpay_list_expenses',
     {
-      title: 'List bills',
-      description: 'List bills/documents. Filter via query (e.g. status=pending_approval).',
+      title: 'List expenses',
+      description:
+        'List expenses (bills/documents). Filter via query (e.g. status=pending_approval).',
       inputSchema: { query: querySchema },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async ({ query }) => {
       try {
-        const decision = checkPolicy({ capability: 'corpay_list_bills', method: 'GET', path: '/bills' });
+        const decision = checkPolicy({
+          capability: 'corpay_list_expenses',
+          method: 'GET',
+          path: '/expenses',
+        });
         if (!decision.allowed) return errorResult(new Error(decision.reason));
-        return jsonResult(await client.request({ method: 'GET', path: '/bills', query }));
+        return jsonResult(await client.request({ method: 'GET', path: '/expenses', query }));
       } catch (error) {
         return errorResult(error);
       }

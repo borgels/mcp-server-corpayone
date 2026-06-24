@@ -28,9 +28,9 @@ export const corpayGatewayTools: GatewayToolDefinition[] = [
     inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
   },
   {
-    name: 'list_bills',
-    title: 'List bills',
-    description: 'List bills/documents, filterable by status (e.g. pending approval).',
+    name: 'list_expenses',
+    title: 'List expenses',
+    description: 'List expenses (bills/documents), filterable by status (e.g. pending approval).',
     risk: 'read',
     defaultEnabled: true,
     inputSchema: {
@@ -39,9 +39,9 @@ export const corpayGatewayTools: GatewayToolDefinition[] = [
     },
   },
   {
-    name: 'get_bill',
-    title: 'Get bill',
-    description: 'Read one bill including vendor, amounts, and line coding.',
+    name: 'get_expense',
+    title: 'Get expense',
+    description: 'Read one expense including vendor, amounts, line items, and coding.',
     risk: 'read',
     defaultEnabled: true,
     inputSchema: {
@@ -53,12 +53,12 @@ export const corpayGatewayTools: GatewayToolDefinition[] = [
   {
     name: 'list_coding_options',
     title: 'List coding options',
-    description: 'List categories (accounts), projects, and cost types available for coding.',
+    description: 'List categories (GL accounts) and labels (project, cost type) for coding.',
     risk: 'read',
     defaultEnabled: true,
     inputSchema: {
       type: 'object',
-      properties: { kind: { type: 'string', enum: ['categories', 'projects', 'cost-types'] } },
+      properties: { kind: { type: 'string', enum: ['categories', 'labels'] } },
     },
   },
 ];
@@ -94,14 +94,14 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
         switch (name) {
           case 'check_connection':
             return await client.request({ method: 'GET', path: String(args.path ?? '/') });
-          case 'list_bills':
+          case 'list_expenses':
             return await client.request({
               method: 'GET',
-              path: '/bills',
+              path: '/expenses',
               query: args as Record<string, QueryValue>,
             });
-          case 'get_bill':
-            return await client.request({ method: 'GET', path: `/bills/${String(args.id)}` });
+          case 'get_expense':
+            return await client.request({ method: 'GET', path: `/expenses/${String(args.id)}` });
           case 'list_coding_options':
             return await client.request({ method: 'GET', path: `/${String(args.kind ?? 'categories')}` });
           default:
@@ -118,10 +118,10 @@ function callContractTool(name: string, args: Record<string, unknown> = {}): Pro
   switch (name) {
     case 'check_connection':
       return Promise.resolve({ ok: true, account: 'contract-fixture' });
-    case 'list_bills':
-      return Promise.resolve({ items: [{ id: 'bill_1', vendor: 'Acme ApS', status: 'pending_approval', amount: 1234.56 }] });
-    case 'get_bill':
-      return Promise.resolve({ id: String(args.id ?? 'bill_1'), vendor: 'Acme ApS', amount: 1234.56, lines: [] });
+    case 'list_expenses':
+      return Promise.resolve({ items: [{ id: 'exp_1', vendor: 'Acme ApS', status: 'pending_approval', amount: 1234.56 }] });
+    case 'get_expense':
+      return Promise.resolve({ id: String(args.id ?? 'exp_1'), vendor: 'Acme ApS', amount: 1234.56, category: null, labels: [], lines: [] });
     case 'list_coding_options':
       return Promise.resolve({ kind: args.kind ?? 'categories', items: [] });
     default:
