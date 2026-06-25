@@ -39,14 +39,17 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
     'corpay_check_connection',
     {
       title: 'Check Corpay One connection',
-      description: 'Validate OAuth credentials and list the teams (companies) the token can access.',
+      description: 'Validate OAuth credentials by acquiring an access token (does not require a teamId).',
       inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
     async () => {
       try {
-        const teams = await client.request({ method: 'GET', path: '/v1/teams', withTeamId: false });
-        return jsonResult({ ok: true, teams });
+        // /v1/teams is forbidden with the expenses/webhooks scopes; validate by
+        // acquiring an OAuth token instead. teamId (from the Corpay One URL or a
+        // webhook payload) is needed for expense/webhook reads.
+        await client.getAccessToken();
+        return jsonResult({ ok: true, note: 'Set teamId to read expenses or manage webhooks.' });
       } catch (error) {
         return errorResult(error);
       }
