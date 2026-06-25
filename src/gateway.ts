@@ -1,5 +1,11 @@
 import { CorpayClient, type QueryValue } from './corpay/client.js';
+import { prepareOperation, executePreparedOperation } from './corpay/operations.js';
 import { formatUnknownError } from './errors.js';
+
+// Re-exported so Borgels control-plane runtimes can validate inbound Corpay One
+// webhooks and filter event types without reaching into package internals.
+export { validateWebhookSignature } from './corpay/webhooks.js';
+export { WEBHOOK_EVENTS } from './corpay/catalog.js';
 
 /**
  * Borgels gateway contract for Corpay One.
@@ -50,6 +56,25 @@ export const corpayGatewayTools: GatewayToolDefinition[] = [
       required: ['id'],
     },
   },
+  {
+    name: 'write_expense_coding',
+    title: 'Write expense coding',
+    description:
+      'Set an expense’s coding: category (GL account), labels (project/cost type), and department. Write — disabled by default; requires CORPAYONE_ENABLE_WRITES and the live PATCH endpoint to be confirmed.',
+    risk: 'write',
+    defaultEnabled: false,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: ['string', 'number'] },
+        category: {},
+        labels: {},
+        department: {},
+        idempotencyKey: { type: 'string' },
+      },
+      required: ['id'],
+    },
+  },
 ];
 
 export interface CorpayGatewayOptions {
@@ -97,6 +122,29 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
             });
           case 'get_expense':
             return await client.request({ method: 'GET', path: `/v3/expenses/${String(args.id)}` });
+          case 'write_expense_coding': {
+            // Route through the connector's prepare -> commit so its allowlist,
+            // policy (writes-gated), and operation hash apply. The PATCH path is
+            // provisional until confirmed against the live Swagger.
+            const body = codingBody(args);
+            const op = prepareOperation({
+              capability: 'corpay_write_expense_coding',
+              method: 'PATCH',
+              pathTemplate: '/v2/expenses/{id}',
+              pathParams: { id: String(args.id) },
+              body,
+              reason: 'gateway write_expense_coding',
+            });
+            if (!op.policyAllowed) {
+              throw new Error(`Blocked by policy: ${op.policyReason}`);
+            }
+            return await executePreparedOperation(
+              client,
+              op,
+              op.operationHash,
+              typeof args.idempotencyKey === 'string' ? args.idempotencyKey : op.operationHash,
+            );
+          }
           default:
             throw new Error(`Unknown gateway tool: ${name}`);
         }
@@ -115,7 +163,18 @@ function callContractTool(name: string, args: Record<string, unknown> = {}): Pro
       return Promise.resolve({ items: [{ id: 'exp_1', state: 'booked', type: 'bill', amount: 1234.56 }] });
     case 'get_expense':
       return Promise.resolve({ id: String(args.id ?? 'exp_1'), state: 'booked', type: 'bill', amount: 1234.56, category: null, labels: [], lines: [] });
+    case 'write_expense_coding':
+      return Promise.resolve({ id: String(args.id ?? 'exp_1'), updated: true, ...codingBody(args) });
     default:
       return Promise.reject(new Error(`Unknown gateway tool: ${name}`));
   }
+}
+
+/** Build the coding payload from gateway args, including only provided fields. */
+function codingBody(args: Record<string, unknown>): Record<string, unknown> {
+  const body: Record<string, unknown> = {};
+  if (args.category !== undefined) body.category = args.category;
+  if (args.labels !== undefined) body.labels = args.labels;
+  if (args.department !== undefined) body.department = args.department;
+  return body;
 }

@@ -75,4 +75,18 @@ describe('gateway contract mode', () => {
     const expenses = (await gateway.callTool('list_expenses')) as { items: unknown[] };
     expect(Array.isArray(expenses.items)).toBe(true);
   });
+
+  it('exposes a write_expense_coding tool (disabled by default) with a contract fixture', async () => {
+    const writeTool = corpayGatewayTools.find(t => t.name === 'write_expense_coding');
+    expect(writeTool?.risk).toBe('write');
+    expect(writeTool?.defaultEnabled).toBe(false);
+    const gateway = createCorpayGateway({ contractMode: true });
+    const result = (await gateway.callTool('write_expense_coding', {
+      id: 'exp_1',
+      category: 1310,
+      labels: { project: 7 },
+    })) as { updated: boolean; category: unknown };
+    expect(result.updated).toBe(true);
+    expect(result.category).toBe(1310);
+  });
 });
