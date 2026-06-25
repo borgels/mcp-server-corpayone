@@ -10,18 +10,28 @@ export { WEBHOOK_EVENTS } from './corpay/catalog.js';
 /**
  * Borgels gateway contract for Corpay One.
  *
- * Mirrors the e-conomic gateway: stable, unprefixed, read-first tool definitions
- * plus a factory the Borgels control plane (mcp.borgels.com) uses to wrap Corpay
- * One without copying connector logic. All gateway tools are read-only; write
- * preparation/commit remain on the full MCP server surface behind write policy.
+ * Matches the e-conomic gateway shape exactly so the Borgels control plane
+ * (mcp.borgels.com) can wrap Corpay One as a provider without copying connector
+ * logic: stable, unprefixed tool definitions (`riskLevel`/`enabledByDefault`) and
+ * a `callTool` returning a `GatewayToolResult`. Reads are enabled by default; the
+ * coding write is disabled by default and gated by the connector's write policy.
  */
+export type GatewayRiskLevel = 'read' | 'write' | 'destructive';
+export type GatewayJsonObject = { [key: string]: unknown };
+
 export interface GatewayToolDefinition {
   name: string;
   title: string;
   description: string;
-  risk: 'read' | 'write';
-  defaultEnabled: boolean;
-  inputSchema: Record<string, unknown>;
+  riskLevel: GatewayRiskLevel;
+  enabledByDefault: boolean;
+  inputSchema: GatewayJsonObject;
+}
+
+export interface GatewayToolResult {
+  content: Array<{ type: 'text'; text: string }>;
+  structuredContent?: unknown;
+  isError?: boolean;
 }
 
 export const corpayGatewayTools: GatewayToolDefinition[] = [
@@ -29,31 +39,33 @@ export const corpayGatewayTools: GatewayToolDefinition[] = [
     name: 'check_connection',
     title: 'Check Corpay One connection',
     description: 'Validate OAuth credentials and list accessible teams.',
-    risk: 'read',
-    defaultEnabled: true,
-    inputSchema: { type: 'object', properties: {} },
+    riskLevel: 'read',
+    enabledByDefault: true,
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
     name: 'list_expenses',
     title: 'List expenses',
     description: 'List expenses (bills/documents), filterable by status (e.g. pending approval).',
-    risk: 'read',
-    defaultEnabled: true,
+    riskLevel: 'read',
+    enabledByDefault: true,
     inputSchema: {
       type: 'object',
       properties: { status: { type: 'string' }, limit: { type: 'number' } },
+      additionalProperties: true,
     },
   },
   {
     name: 'get_expense',
     title: 'Get expense',
     description: 'Read one expense including vendor, amounts, line items, and coding.',
-    risk: 'read',
-    defaultEnabled: true,
+    riskLevel: 'read',
+    enabledByDefault: true,
     inputSchema: {
       type: 'object',
       properties: { id: { type: ['string', 'number'] } },
       required: ['id'],
+      additionalProperties: false,
     },
   },
   {
@@ -61,8 +73,8 @@ export const corpayGatewayTools: GatewayToolDefinition[] = [
     title: 'Write expense coding',
     description:
       'Set an expense’s coding: category (GL account), labels (project/cost type), and department. Write — disabled by default; requires CORPAYONE_ENABLE_WRITES and the live PATCH endpoint to be confirmed.',
-    risk: 'write',
-    defaultEnabled: false,
+    riskLevel: 'write',
+    enabledByDefault: false,
     inputSchema: {
       type: 'object',
       properties: {
@@ -73,6 +85,7 @@ export const corpayGatewayTools: GatewayToolDefinition[] = [
         idempotencyKey: { type: 'string' },
       },
       required: ['id'],
+      additionalProperties: false,
     },
   },
 ];
@@ -91,12 +104,12 @@ export interface CorpayGatewayOptions {
 
 export interface CorpayGateway {
   tools: GatewayToolDefinition[];
-  callTool(name: string, args?: Record<string, unknown>): Promise<unknown>;
+  callTool(name: string, args?: GatewayJsonObject): Promise<GatewayToolResult>;
 }
 
 export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayGateway {
   if (options.contractMode) {
-    return { tools: corpayGatewayTools, callTool: callContractTool };
+    return { tools: corpayGatewayTools, callTool: (name, args = {}) => Promise.resolve(contractToolResult(name, args)) };
   }
   const client = new CorpayClient({
     clientId: options.clientId,
@@ -113,68 +126,114 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
       try {
         switch (name) {
           case 'check_connection':
-            return await client.request({ method: 'GET', path: '/v1/teams', withTeamId: false });
+            return jsonResult(
+              'Corpay One connection is available.',
+              await client.request({ method: 'GET', path: '/v1/teams', withTeamId: false }),
+            );
           case 'list_expenses':
-            return await client.request({
-              method: 'GET',
-              path: '/v2/expenses',
-              query: args as Record<string, QueryValue>,
-            });
+            return jsonResult(
+              'Listed Corpay One expenses.',
+              await client.request({ method: 'GET', path: '/v2/expenses', query: toQuery(args) }),
+            );
           case 'get_expense':
-            return await client.request({ method: 'GET', path: `/v3/expenses/${String(args.id)}` });
+            return jsonResult(
+              'Fetched Corpay One expense.',
+              await client.request({ method: 'GET', path: `/v3/expenses/${String(args.id)}` }),
+            );
           case 'write_expense_coding': {
             // Route through the connector's prepare -> commit so its allowlist,
-            // policy (writes-gated), and operation hash apply. The PATCH path is
-            // provisional until confirmed against the live Swagger.
-            const body = codingBody(args);
+            // write policy, and operation hash apply. PATCH path is provisional
+            // until confirmed against the live Swagger.
             const op = prepareOperation({
               capability: 'corpay_write_expense_coding',
               method: 'PATCH',
               pathTemplate: '/v2/expenses/{id}',
               pathParams: { id: String(args.id) },
-              body,
+              body: codingBody(args),
               reason: 'gateway write_expense_coding',
             });
             if (!op.policyAllowed) {
-              throw new Error(`Blocked by policy: ${op.policyReason}`);
+              return errorResult(`Blocked by policy: ${op.policyReason}`);
             }
-            return await executePreparedOperation(
+            const result = await executePreparedOperation(
               client,
               op,
               op.operationHash,
               typeof args.idempotencyKey === 'string' ? args.idempotencyKey : op.operationHash,
             );
+            return jsonResult('Updated Corpay One expense coding.', result ?? { ok: true });
           }
           default:
-            throw new Error(`Unknown gateway tool: ${name}`);
+            return errorResult(`Unsupported Corpay One gateway tool: ${name}`);
         }
       } catch (error) {
-        throw new Error(formatUnknownError(error));
+        return errorResult(formatUnknownError(error));
       }
     },
   };
 }
 
-function callContractTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
+function contractToolResult(name: string, args: GatewayJsonObject): GatewayToolResult {
   switch (name) {
     case 'check_connection':
-      return Promise.resolve({ ok: true, teams: [{ id: 'nBvY6dLQ', name: 'Contract Fixture ApS' }] });
+      return jsonResult('Corpay One connection is available.', {
+        ok: true,
+        teams: [{ id: 'nBvY6dLQ', name: 'Contract Fixture ApS' }],
+      });
     case 'list_expenses':
-      return Promise.resolve({ items: [{ id: 'exp_1', state: 'booked', type: 'bill', amount: 1234.56 }] });
+      return jsonResult('Listed Corpay One expenses.', {
+        items: [{ id: 'exp_1', state: 'booked', type: 'bill', amount: 1234.56 }],
+      });
     case 'get_expense':
-      return Promise.resolve({ id: String(args.id ?? 'exp_1'), state: 'booked', type: 'bill', amount: 1234.56, category: null, labels: [], lines: [] });
+      return jsonResult('Fetched Corpay One expense.', {
+        id: String(args.id ?? 'exp_1'),
+        state: 'booked',
+        type: 'bill',
+        amount: 1234.56,
+        category: null,
+        labels: [],
+        lines: [],
+      });
     case 'write_expense_coding':
-      return Promise.resolve({ id: String(args.id ?? 'exp_1'), updated: true, ...codingBody(args) });
+      return jsonResult('Updated Corpay One expense coding.', {
+        id: String(args.id ?? 'exp_1'),
+        updated: true,
+        ...codingBody(args),
+      });
     default:
-      return Promise.reject(new Error(`Unknown gateway tool: ${name}`));
+      return errorResult(`Unsupported Corpay One gateway tool: ${name}`);
   }
 }
 
+/** Coerce gateway args into query parameters (drops non-scalar values). */
+function toQuery(args: GatewayJsonObject): Record<string, QueryValue> {
+  const query: Record<string, QueryValue> = {};
+  for (const [key, value] of Object.entries(args)) {
+    if (
+      value === null ||
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean'
+    ) {
+      query[key] = value;
+    }
+  }
+  return query;
+}
+
 /** Build the coding payload from gateway args, including only provided fields. */
-function codingBody(args: Record<string, unknown>): Record<string, unknown> {
+function codingBody(args: GatewayJsonObject): Record<string, unknown> {
   const body: Record<string, unknown> = {};
   if (args.category !== undefined) body.category = args.category;
   if (args.labels !== undefined) body.labels = args.labels;
   if (args.department !== undefined) body.department = args.department;
   return body;
+}
+
+function jsonResult(text: string, structuredContent: unknown): GatewayToolResult {
+  return { content: [{ type: 'text', text }], structuredContent };
+}
+
+function errorResult(text: string): GatewayToolResult {
+  return { isError: true, content: [{ type: 'text', text }] };
 }
