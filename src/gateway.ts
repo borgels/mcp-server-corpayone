@@ -17,7 +17,16 @@ export { WEBHOOK_EVENTS } from './corpay/catalog.js';
  * coding write is disabled by default and gated by the connector's write policy.
  */
 export type GatewayRiskLevel = 'read' | 'write' | 'destructive';
-export type GatewayJsonObject = { [key: string]: unknown };
+// Structurally identical to the other Borgels connector gateways (e-conomic et al.)
+// so this gateway plugs into the control plane's shared connector typing.
+export type GatewayJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | GatewayJsonValue[]
+  | { [key: string]: GatewayJsonValue };
+export type GatewayJsonObject = { [key: string]: GatewayJsonValue };
 
 export interface GatewayToolDefinition {
   name: string;
@@ -30,7 +39,7 @@ export interface GatewayToolDefinition {
 
 export interface GatewayToolResult {
   content: Array<{ type: 'text'; text: string }>;
-  structuredContent?: unknown;
+  structuredContent?: GatewayJsonValue;
   isError?: boolean;
 }
 
@@ -231,7 +240,12 @@ function codingBody(args: GatewayJsonObject): Record<string, unknown> {
 }
 
 function jsonResult(text: string, structuredContent: unknown): GatewayToolResult {
-  return { content: [{ type: 'text', text }], structuredContent };
+  return { content: [{ type: 'text', text }], structuredContent: toGatewayJson(structuredContent) };
+}
+
+/** Coerce an arbitrary value into a JSON-safe GatewayJsonValue. */
+function toGatewayJson(value: unknown): GatewayJsonValue {
+  return JSON.parse(JSON.stringify(value ?? null)) as GatewayJsonValue;
 }
 
 function errorResult(text: string): GatewayToolResult {
