@@ -68,25 +68,36 @@ describe('webhook signature validation', () => {
   });
 });
 
-describe('gateway contract mode', () => {
-  it('returns deterministic fixtures without network', async () => {
-    const gateway = createCorpayGateway({ contractMode: true });
-    expect(gateway.tools).toBe(corpayGatewayTools);
-    const expenses = (await gateway.callTool('list_expenses')) as { items: unknown[] };
-    expect(Array.isArray(expenses.items)).toBe(true);
+describe('gateway contract', () => {
+  it('matches the Borgels gateway tool shape (riskLevel/enabledByDefault)', () => {
+    for (const tool of corpayGatewayTools) {
+      expect(['read', 'write', 'destructive']).toContain(tool.riskLevel);
+      expect(typeof tool.enabledByDefault).toBe('boolean');
+    }
+    const writeTool = corpayGatewayTools.find(t => t.name === 'write_expense_coding');
+    expect(writeTool?.riskLevel).toBe('write');
+    expect(writeTool?.enabledByDefault).toBe(false);
   });
 
-  it('exposes a write_expense_coding tool (disabled by default) with a contract fixture', async () => {
-    const writeTool = corpayGatewayTools.find(t => t.name === 'write_expense_coding');
-    expect(writeTool?.risk).toBe('write');
-    expect(writeTool?.defaultEnabled).toBe(false);
+  it('returns GatewayToolResult fixtures in contract mode (no network)', async () => {
     const gateway = createCorpayGateway({ contractMode: true });
-    const result = (await gateway.callTool('write_expense_coding', {
+    expect(gateway.tools).toBe(corpayGatewayTools);
+
+    const list = await gateway.callTool('list_expenses');
+    expect(list.isError).toBeUndefined();
+    expect(list.content[0]?.type).toBe('text');
+    expect(Array.isArray((list.structuredContent as { items: unknown[] }).items)).toBe(true);
+
+    const write = await gateway.callTool('write_expense_coding', {
       id: 'exp_1',
       category: 1310,
       labels: { project: 7 },
-    })) as { updated: boolean; category: unknown };
-    expect(result.updated).toBe(true);
-    expect(result.category).toBe(1310);
+    });
+    const structured = write.structuredContent as { updated: boolean; category: unknown };
+    expect(structured.updated).toBe(true);
+    expect(structured.category).toBe(1310);
+
+    const unknown = await gateway.callTool('nope');
+    expect(unknown.isError).toBe(true);
   });
 });
