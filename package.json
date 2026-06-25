@@ -24,6 +24,7 @@
   "scripts": {
     "build": "tsup src/transports/stdio.ts src/gateway.ts --format esm --dts --clean --sourcemap",
     "dev": "tsx src/transports/stdio.ts",
+    "auth:grant": "tsx src/auth/capture-token.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "prepare": "npm run build",

@@ -30,12 +30,31 @@ npm install
 npm run build
 ```
 
-Set credentials in the MCP server environment. The server reads these from the
-environment only and never accepts credentials as tool arguments.
+Auth is OAuth 2.0 (authorization_code + refresh_token). Create an app at
+`https://web.<env>.corpayone.com/developers` with scopes `expenses.all`,
+`webhooks.all`, `offline_access` and a redirect URI matching
+`CORPAYONE_REDIRECT_URI`. Then capture a refresh token once:
 
 ```sh
-export CORPAYONE_API_TOKEN="your-api-token"
+export CORPAYONE_ENV=staging   # or production
+export CORPAYONE_CLIENT_ID="..."
+export CORPAYONE_CLIENT_SECRET="..."
+export CORPAYONE_REDIRECT_URI="http://localhost:53682/corpayone/callback"
+npm run auth:grant             # prints CORPAYONE_REFRESH_TOKEN
 ```
+
+The server reads all credentials from the environment only and never accepts
+them as tool arguments. Access tokens (~1h) are refreshed automatically.
+
+```sh
+export CORPAYONE_REFRESH_TOKEN="..."
+export CORPAYONE_WEBHOOK_SECRET="..."   # to validate inbound webhooks
+export CORPAYONE_TEAM_ID="..."          # company slug; see GET /v1/teams
+```
+
+Hosts are selected by `CORPAYONE_ENV`: staging uses
+`api.staging.corpayone.com/external` + `identity.staging.corpayone.com`;
+production uses `api.corpayone.com/external` + `identity.corpayone.com`.
 
 ## Domain model
 
@@ -45,9 +64,12 @@ coding and approval). Coding is split into a **category** (the GL account) and
 follows this model; exact REST paths and field names are verified live during
 bring-up.
 
-Documented webhook events (usable to trigger downstream automation): `expense.added`,
-`expense.approved`, `expense.declined`, `expense.paid`, and `*_updated` variants
-for amount, line amounts, category, label, note, and date.
+Webhook events drive integrations: expense state transitions
+(`expense.state.pending|awaiting|booked|initialized|paid|paused|refunded|cancelled`)
+and field/action events (`expense.category.updated`, `expense.label.updated`,
+`expense.approval.approved`, `payment.updated`, …). Inbound webhook payloads are
+signed with `X-Roger-Signature`; validate them with `validateWebhookSignature`
+from `src/corpay/webhooks.ts` using your `CORPAYONE_WEBHOOK_SECRET`.
 
 ## Tools
 

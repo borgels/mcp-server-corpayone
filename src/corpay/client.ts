@@ -4,8 +4,13 @@ export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 export type QueryValue = string | number | boolean | null | undefined;
 
 export interface CorpayClientOptions {
-  apiToken?: string;
-  baseUrl?: string;
+  clientId?: string;
+  clientSecret?: string;
+  refreshToken?: string;
+  teamId?: string;
+  env?: 'staging' | 'production';
+  apiBaseUrl?: string;
+  identityBaseUrl?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
 }
@@ -18,52 +23,122 @@ export interface CorpayRequestOptions {
   body?: unknown;
   headers?: Record<string, string>;
   idempotencyKey?: string;
+  /** Set false to omit the default teamId query parameter. */
+  withTeamId?: boolean;
 }
 
-const DEFAULT_BASE_URL = 'https://api.corpayone.com';
+const HOSTS = {
+  staging: {
+    api: 'https://api.staging.corpayone.com/external',
+    identity: 'https://identity.staging.corpayone.com',
+  },
+  production: {
+    api: 'https://api.corpayone.com/external',
+    identity: 'https://identity.corpayone.com',
+  },
+} as const;
 
 /**
- * Minimal Corpay One HTTP client.
+ * Corpay One API client.
  *
- * Credentials are read only from the server environment (never tool arguments).
- * The exact auth header is confirmed during connector bring-up; Corpay One uses
- * a bearer API token by default (`Authorization: Bearer <token>`).
+ * Auth is OAuth 2.0 (authorization_code + refresh_token). Credentials are read
+ * only from the server environment, never tool arguments. Access tokens are
+ * short-lived (~1h) and refreshed automatically using the stored refresh token.
  */
 export class CorpayClient {
-  private readonly apiToken?: string;
-  private readonly baseUrl: string;
+  private readonly clientId?: string;
+  private readonly clientSecret?: string;
+  private readonly refreshToken?: string;
+  private readonly teamId?: string;
+  private readonly apiBaseUrl: string;
+  private readonly identityBaseUrl: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number;
 
+  private accessToken?: string;
+  private accessTokenExpiresAt = 0;
+
   constructor(options: CorpayClientOptions = {}) {
-    this.apiToken = options.apiToken ?? process.env.CORPAYONE_API_TOKEN;
-    this.baseUrl = trimTrailingSlash(
-      options.baseUrl ?? process.env.CORPAYONE_BASE_URL ?? DEFAULT_BASE_URL,
+    const env = options.env ?? (process.env.CORPAYONE_ENV === 'production' ? 'production' : 'staging');
+    this.clientId = options.clientId ?? process.env.CORPAYONE_CLIENT_ID;
+    this.clientSecret = options.clientSecret ?? process.env.CORPAYONE_CLIENT_SECRET;
+    this.refreshToken = options.refreshToken ?? process.env.CORPAYONE_REFRESH_TOKEN;
+    this.teamId = options.teamId ?? process.env.CORPAYONE_TEAM_ID;
+    this.apiBaseUrl = trimTrailingSlash(
+      options.apiBaseUrl ?? process.env.CORPAYONE_API_BASE_URL ?? HOSTS[env].api,
     );
-    assertSafeBaseUrl(this.baseUrl, 'CORPAYONE_BASE_URL');
+    this.identityBaseUrl = trimTrailingSlash(
+      options.identityBaseUrl ?? process.env.CORPAYONE_IDENTITY_BASE_URL ?? HOSTS[env].identity,
+    );
+    assertSafeBaseUrl(this.apiBaseUrl, 'CORPAYONE_API_BASE_URL');
+    assertSafeBaseUrl(this.identityBaseUrl, 'CORPAYONE_IDENTITY_BASE_URL');
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs ?? Number(process.env.CORPAYONE_TIMEOUT_MS ?? 30_000);
   }
 
+  /** Exchange the refresh token for a fresh access token (cached until expiry). */
+  async getAccessToken(): Promise<string> {
+    const now = Date.now();
+    if (this.accessToken && now < this.accessTokenExpiresAt - 60_000) {
+      return this.accessToken;
+    }
+    if (!this.clientId || !this.clientSecret || !this.refreshToken) {
+      throw new Error(
+        'Missing Corpay One OAuth credentials. Set CORPAYONE_CLIENT_ID, CORPAYONE_CLIENT_SECRET, and CORPAYONE_REFRESH_TOKEN in the server environment (run `npm run auth:grant`).',
+      );
+    }
+    const basic = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
+    const response = await this.fetchImpl(`${this.identityBaseUrl}/connect/token`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Basic ${basic}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Accept: 'application/json',
+      },
+      body: new URLSearchParams({
+        refresh_token: this.refreshToken,
+        grant_type: 'refresh_token',
+      }).toString(),
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+    const payload = (await readResponseBody(response)) as
+      | { access_token?: string; expires_in?: number }
+      | string
+      | null;
+    if (!response.ok || typeof payload !== 'object' || payload === null || !payload.access_token) {
+      throw new CorpayHttpError({
+        status: response.status,
+        method: 'POST',
+        url: `${this.identityBaseUrl}/connect/token`,
+        payload,
+        fallbackMessage: 'token refresh failed',
+      });
+    }
+    this.accessToken = payload.access_token;
+    this.accessTokenExpiresAt = now + (payload.expires_in ?? 3600) * 1000;
+    return this.accessToken;
+  }
+
   async request<T>(options: CorpayRequestOptions): Promise<T> {
-    this.assertConfigured();
     const method = options.method ?? 'GET';
+    const token = await this.getAccessToken();
+
+    const query = { ...options.query };
+    if ((options.withTeamId ?? true) && this.teamId && query.teamId === undefined) {
+      query.teamId = this.teamId;
+    }
     const url = appendQuery(
-      options.url ?? `${this.baseUrl}${normalizePath(options.path ?? '/')}`,
-      options.query,
+      options.url ?? `${this.apiBaseUrl}${normalizePath(options.path ?? '/')}`,
+      query,
     );
 
     const headers: Record<string, string> = {
       Accept: 'application/json',
-      Authorization: `Bearer ${this.apiToken ?? ''}`,
+      Authorization: `Bearer ${token}`,
       ...options.headers,
     };
-    if (options.body !== undefined) {
-      headers['Content-Type'] = 'application/json';
-    }
-    if (options.idempotencyKey) {
-      headers['Idempotency-Key'] = options.idempotencyKey;
-    }
+    if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+    if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
 
     const response = await this.fetchImpl(url, {
       method,
@@ -84,14 +159,6 @@ export class CorpayClient {
       });
     }
     return payload as T;
-  }
-
-  private assertConfigured(): void {
-    if (!this.apiToken) {
-      throw new Error(
-        'Missing Corpay One credentials. Set CORPAYONE_API_TOKEN in the MCP server environment.',
-      );
-    }
   }
 }
 

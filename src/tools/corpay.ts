@@ -7,7 +7,6 @@ import {
   executePreparedOperation,
   type PreparedOperation,
 } from '../corpay/operations.js';
-import { checkPolicy } from '../corpay/policy.js';
 import { formatUnknownError } from '../errors.js';
 
 const pathParamsSchema = z.record(z.string(), z.union([z.string(), z.number()])).optional();
@@ -40,15 +39,14 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
     'corpay_check_connection',
     {
       title: 'Check Corpay One connection',
-      description:
-        'Validate credentials by issuing a read against a configurable path (default "/").',
-      inputSchema: { path: z.string().trim().default('/') },
+      description: 'Validate OAuth credentials and list the teams (companies) the token can access.',
+      inputSchema: {},
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    async ({ path }) => {
+    async () => {
       try {
-        const data = await client.request({ method: 'GET', path });
-        return jsonResult({ ok: true, path, data });
+        const teams = await client.request({ method: 'GET', path: '/v1/teams', withTeamId: false });
+        return jsonResult({ ok: true, teams });
       } catch (error) {
         return errorResult(error);
       }
@@ -118,12 +116,56 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
         prepareOperation({
           capability: 'corpay_prepare_expense_coding',
           method: 'PATCH',
-          pathTemplate: '/expenses/{id}',
+          pathTemplate: '/v2/expenses/{id}',
           pathParams: { id: expenseId },
           body,
           reason,
         }),
       ),
+  );
+
+  server.registerTool(
+    'corpay_prepare_webhook_change',
+    {
+      title: 'Prepare webhook change',
+      description:
+        'Dry-run create (POST), update (PUT), or delete (DELETE) of a webhook subscription. Returns an operationHash to commit.',
+      inputSchema: {
+        method: z.enum(['POST', 'PUT', 'DELETE']).default('POST'),
+        webhookId: z.union([z.string(), z.number()]).optional(),
+        body: z.unknown().optional(),
+        reason: z.string().trim().min(1),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ method, webhookId, body, reason }) =>
+      jsonResult(
+        prepareOperation({
+          capability: 'corpay_prepare_webhook_change',
+          method,
+          pathTemplate: method === 'DELETE' ? '/v1/webhooks/{id}' : '/v1/webhooks',
+          pathParams: method === 'DELETE' ? { id: webhookId ?? '' } : undefined,
+          body,
+          reason,
+        }),
+      ),
+  );
+
+  server.registerTool(
+    'corpay_list_webhooks',
+    {
+      title: 'List webhooks',
+      description: 'List active webhook subscriptions for the configured team.',
+      inputSchema: {},
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    async () => {
+      try {
+        return jsonResult(await client.request({ method: 'GET', path: '/v1/webhooks' }));
+      } catch (error) {
+        return errorResult(error);
+      }
+    },
   );
 
   server.registerTool(
@@ -166,13 +208,7 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
     },
     async ({ query }) => {
       try {
-        const decision = checkPolicy({
-          capability: 'corpay_list_expenses',
-          method: 'GET',
-          path: '/expenses',
-        });
-        if (!decision.allowed) return errorResult(new Error(decision.reason));
-        return jsonResult(await client.request({ method: 'GET', path: '/expenses', query }));
+        return jsonResult(await client.request({ method: 'GET', path: '/v2/expenses', query }));
       } catch (error) {
         return errorResult(error);
       }
