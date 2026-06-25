@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Gateway: added a `write_expense_coding` tool (risk `write`, disabled by default)
+  that sets an expense's category/labels/department, routed through the
+  connector's prepare → commit (allowlist + write policy + operation hash). The
+  PATCH endpoint stays provisional until confirmed live. Re-exported
+  `validateWebhookSignature` and `WEBHOOK_EVENTS` from the gateway entry so the
+  Borgels control plane can validate inbound webhooks without package internals.
 - Built the client against the official Corpay One API contract: OAuth 2.0
   (authorization_code + refresh_token, auto-refreshed Bearer access tokens),
   `/external` base with version-prefixed endpoints (`GET /v1/teams`,
