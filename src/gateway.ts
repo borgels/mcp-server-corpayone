@@ -134,11 +134,17 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
     async callTool(name, args = {}) {
       try {
         switch (name) {
-          case 'check_connection':
-            return jsonResult(
-              'Corpay One connection is available.',
-              await client.request({ method: 'GET', path: '/v1/teams', withTeamId: false }),
-            );
+          case 'check_connection': {
+            // Validate credentials by acquiring an OAuth access token. We do not
+            // call /v1/teams: with the expenses/webhooks scopes it returns 403,
+            // and expenses/webhooks reads require a teamId (the slug from the
+            // Corpay One URL or webhook payload), which is configured per use.
+            await client.getAccessToken();
+            return jsonResult('Corpay One credentials are valid (OAuth token acquired).', {
+              ok: true,
+              note: 'Set teamId to read expenses or manage webhooks.',
+            });
+          }
           case 'list_expenses':
             return jsonResult(
               'Listed Corpay One expenses.',
@@ -185,9 +191,9 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
 function contractToolResult(name: string, args: GatewayJsonObject): GatewayToolResult {
   switch (name) {
     case 'check_connection':
-      return jsonResult('Corpay One connection is available.', {
+      return jsonResult('Corpay One credentials are valid (OAuth token acquired).', {
         ok: true,
-        teams: [{ id: 'nBvY6dLQ', name: 'Contract Fixture ApS' }],
+        note: 'Set teamId to read expenses or manage webhooks.',
       });
     case 'list_expenses':
       return jsonResult('Listed Corpay One expenses.', {
