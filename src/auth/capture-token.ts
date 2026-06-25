@@ -10,6 +10,19 @@
  * CORPAYONE_REDIRECT_URI, and CORPAYONE_ENV (staging|production).
  */
 import { createServer } from 'node:http';
+import { readFileSync } from 'node:fs';
+
+// Load .env.local (KEY=VALUE lines) into process.env so the helper is runnable
+// with `npm run auth:grant` without exporting variables first.
+try {
+  const raw = readFileSync(new URL('../../.env.local', import.meta.url), 'utf8');
+  for (const line of raw.split(/\r?\n/)) {
+    const m = /^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/.exec(line);
+    if (m && m[1] && process.env[m[1]] === undefined) process.env[m[1]] = m[2] ?? '';
+  }
+} catch {
+  // no .env.local; rely on the ambient environment
+}
 
 const env = process.env.CORPAYONE_ENV === 'production' ? 'production' : 'staging';
 const identityBase =
@@ -17,6 +30,11 @@ const identityBase =
   (env === 'production'
     ? 'https://identity.corpayone.com'
     : 'https://identity.staging.corpayone.com');
+const apiBase =
+  process.env.CORPAYONE_API_BASE_URL ??
+  (env === 'production'
+    ? 'https://api.corpayone.com/external'
+    : 'https://api.staging.corpayone.com/external');
 const clientId = process.env.CORPAYONE_CLIENT_ID;
 const clientSecret = process.env.CORPAYONE_CLIENT_SECRET;
 const redirectUri = process.env.CORPAYONE_REDIRECT_URI ?? 'http://localhost:53682/corpayone/callback';
@@ -60,8 +78,44 @@ async function exchange(code: string): Promise<void> {
     console.error('Token exchange failed:', response.status, JSON.stringify(data));
     process.exit(1);
   }
-  console.log('\nStore this in your environment:\n');
-  console.log(`CORPAYONE_REFRESH_TOKEN=${data.refresh_token}\n`);
+  console.log('\nStore these in .env.local:\n');
+  console.log(`CORPAYONE_REFRESH_TOKEN=${data.refresh_token}`);
+
+  // Fetch the team(s) so the team id can be stored in the same step.
+  try {
+    const teamsRes = await fetch(`${apiBase}/v1/teams`, {
+      headers: { Authorization: `Bearer ${data.access_token}`, Accept: 'application/json' },
+    });
+    const teams = (await teamsRes.json()) as unknown;
+    const ids = extractTeamIds(teams);
+    if (ids.length === 1) {
+      console.log(`CORPAYONE_TEAM_ID=${ids[0]}`);
+    } else if (ids.length > 1) {
+      console.log(`# Multiple teams — pick one: ${ids.join(', ')}`);
+      console.log(`CORPAYONE_TEAM_ID=${ids[0]}`);
+    } else {
+      console.log('# Could not auto-detect team id. Response from GET /v1/teams:');
+      console.log(`# ${JSON.stringify(teams)}`);
+    }
+  } catch (error) {
+    console.log(`# Could not fetch teams: ${(error as Error).message}`);
+  }
+  console.log('');
+}
+
+function extractTeamIds(teams: unknown): string[] {
+  const list = Array.isArray(teams)
+    ? teams
+    : Array.isArray((teams as { data?: unknown[] })?.data)
+      ? (teams as { data: unknown[] }).data
+      : Array.isArray((teams as { items?: unknown[] })?.items)
+        ? (teams as { items: unknown[] }).items
+        : [];
+  return list
+    .map(t => (t as { id?: unknown; teamId?: unknown; slug?: unknown }))
+    .map(t => t.id ?? t.teamId ?? t.slug)
+    .filter((v): v is string | number => typeof v === 'string' || typeof v === 'number')
+    .map(String);
 }
 
 const server = createServer((req, res) => {
