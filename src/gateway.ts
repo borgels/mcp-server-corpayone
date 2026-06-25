@@ -22,10 +22,10 @@ export const corpayGatewayTools: GatewayToolDefinition[] = [
   {
     name: 'check_connection',
     title: 'Check Corpay One connection',
-    description: 'Validate credentials and return account context.',
+    description: 'Validate OAuth credentials and list accessible teams.',
     risk: 'read',
     defaultEnabled: true,
-    inputSchema: { type: 'object', properties: { path: { type: 'string' } } },
+    inputSchema: { type: 'object', properties: {} },
   },
   {
     name: 'list_expenses',
@@ -50,22 +50,14 @@ export const corpayGatewayTools: GatewayToolDefinition[] = [
       required: ['id'],
     },
   },
-  {
-    name: 'list_coding_options',
-    title: 'List coding options',
-    description: 'List categories (GL accounts) and labels (project, cost type) for coding.',
-    risk: 'read',
-    defaultEnabled: true,
-    inputSchema: {
-      type: 'object',
-      properties: { kind: { type: 'string', enum: ['categories', 'labels'] } },
-    },
-  },
 ];
 
 export interface CorpayGatewayOptions {
-  apiToken?: string;
-  baseUrl?: string;
+  clientId?: string;
+  clientSecret?: string;
+  refreshToken?: string;
+  teamId?: string;
+  env?: 'staging' | 'production';
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   /** Deterministic, no-network fixture mode for review/demo automation. */
@@ -82,8 +74,11 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
     return { tools: corpayGatewayTools, callTool: callContractTool };
   }
   const client = new CorpayClient({
-    apiToken: options.apiToken,
-    baseUrl: options.baseUrl,
+    clientId: options.clientId,
+    clientSecret: options.clientSecret,
+    refreshToken: options.refreshToken,
+    teamId: options.teamId,
+    env: options.env,
     fetchImpl: options.fetchImpl,
     timeoutMs: options.timeoutMs,
   });
@@ -93,17 +88,15 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
       try {
         switch (name) {
           case 'check_connection':
-            return await client.request({ method: 'GET', path: String(args.path ?? '/') });
+            return await client.request({ method: 'GET', path: '/v1/teams', withTeamId: false });
           case 'list_expenses':
             return await client.request({
               method: 'GET',
-              path: '/expenses',
+              path: '/v2/expenses',
               query: args as Record<string, QueryValue>,
             });
           case 'get_expense':
-            return await client.request({ method: 'GET', path: `/expenses/${String(args.id)}` });
-          case 'list_coding_options':
-            return await client.request({ method: 'GET', path: `/${String(args.kind ?? 'categories')}` });
+            return await client.request({ method: 'GET', path: `/v3/expenses/${String(args.id)}` });
           default:
             throw new Error(`Unknown gateway tool: ${name}`);
         }
@@ -117,13 +110,11 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
 function callContractTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
   switch (name) {
     case 'check_connection':
-      return Promise.resolve({ ok: true, account: 'contract-fixture' });
+      return Promise.resolve({ ok: true, teams: [{ id: 'nBvY6dLQ', name: 'Contract Fixture ApS' }] });
     case 'list_expenses':
-      return Promise.resolve({ items: [{ id: 'exp_1', vendor: 'Acme ApS', status: 'pending_approval', amount: 1234.56 }] });
+      return Promise.resolve({ items: [{ id: 'exp_1', state: 'booked', type: 'bill', amount: 1234.56 }] });
     case 'get_expense':
-      return Promise.resolve({ id: String(args.id ?? 'exp_1'), vendor: 'Acme ApS', amount: 1234.56, category: null, labels: [], lines: [] });
-    case 'list_coding_options':
-      return Promise.resolve({ kind: args.kind ?? 'categories', items: [] });
+      return Promise.resolve({ id: String(args.id ?? 'exp_1'), state: 'booked', type: 'bill', amount: 1234.56, category: null, labels: [], lines: [] });
     default:
       return Promise.reject(new Error(`Unknown gateway tool: ${name}`));
   }

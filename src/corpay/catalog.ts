@@ -8,6 +8,8 @@ export interface EndpointOperation {
   pathTemplate: string;
   summary: string;
   risk: CapabilityRisk;
+  /** Provisional = documented elsewhere (full Swagger), confirmed live during bring-up. */
+  provisional?: boolean;
 }
 
 export interface Capability {
@@ -20,53 +22,69 @@ export interface Capability {
 }
 
 /**
- * Corpay One resource map (informed by public docs; paths VERIFIED live).
+ * Corpay One API endpoints.
  *
- * Corpay One exposes a REST API at https://api.corpayone.com (Swagger at /docs,
- * auth-gated). The product's core entity is the "expense" (an incoming bill or
- * document awaiting coding and approval). Coding is split into a "category"
- * (the GL account) and "labels" (configurable dimensions such as project and
- * cost type). This resource list follows that documented domain model; exact
- * paths, casing, and writable fields are VERIFIED via read-first live
- * introspection during connector bring-up before write tools are enabled.
- * Treat this as the allowlist seed, not a guarantee of upstream shape.
+ * Base URL is `.../external`; resources are version-prefixed per the official
+ * getting-started guide. Read + webhook endpoints are documented there; the
+ * expense coding-write endpoint is taken from the full Swagger (api.corpayone.com/docs)
+ * and re-verified live during bring-up (marked `provisional`).
+ *
+ * The product's core entity is the "expense" (an uploaded bill/document). Coding
+ * fields seen on the webhook surface include category (GL account), label, and
+ * department. Most calls require a `teamId` (the company slug).
  */
-export const CORPAY_RESOURCES: Array<{ resource: string; writable: boolean }> = [
-  { resource: 'expenses', writable: true }, // bills/documents awaiting coding & approval
-  { resource: 'vendors', writable: true },
-  { resource: 'categories', writable: false }, // GL accounts/categories
-  { resource: 'labels', writable: false }, // dimensions (project, cost type, ...)
-  { resource: 'documents', writable: true },
-  { resource: 'payments', writable: false },
-  { resource: 'webhooks', writable: true },
+export const ENDPOINT_OPERATIONS: EndpointOperation[] = [
+  { id: id('GET', '/v1/teams'), method: 'GET', pathTemplate: '/v1/teams', summary: 'List teams (companies) the token can access.', risk: 'read' },
+  { id: id('GET', '/v2/expenses'), method: 'GET', pathTemplate: '/v2/expenses', summary: 'List expenses (bills/documents); filter by state, requires teamId.', risk: 'read' },
+  { id: id('GET', '/v3/expenses/{id}'), method: 'GET', pathTemplate: '/v3/expenses/{id}', summary: 'Get full detail for one expense.', risk: 'read' },
+  { id: id('GET', '/v1/webhooks'), method: 'GET', pathTemplate: '/v1/webhooks', summary: 'List active webhook subscriptions (requires teamId).', risk: 'read' },
+  { id: id('POST', '/v1/webhooks'), method: 'POST', pathTemplate: '/v1/webhooks', summary: 'Create a webhook subscription.', risk: 'commit' },
+  { id: id('PUT', '/v1/webhooks'), method: 'PUT', pathTemplate: '/v1/webhooks', summary: 'Update a webhook subscription.', risk: 'commit' },
+  { id: id('DELETE', '/v1/webhooks/{id}'), method: 'DELETE', pathTemplate: '/v1/webhooks/{id}', summary: 'Delete a webhook subscription.', risk: 'dangerous' },
+  // Expense coding write — confirm exact path/verb/fields against the live Swagger.
+  { id: id('PATCH', '/v2/expenses/{id}'), method: 'PATCH', pathTemplate: '/v2/expenses/{id}', summary: 'Update an expense (coding: category, label, department, ...).', risk: 'commit', provisional: true },
 ];
 
-/**
- * Corpay One webhook event types (from the documented integration surface).
- * Used to trigger downstream automation (e.g. code a freshly-added expense).
- */
+/** Webhook event types Corpay One can emit (subscribe selectively). */
 export const WEBHOOK_EVENTS = [
-  'expense.added',
-  'expense.approved',
-  'expense.declined',
-  'expense.paid',
-  'expense.amount_updated',
-  'expense.amount_lines_updated',
-  'expense.category_updated',
-  'expense.label_updated',
-  'expense.note_updated',
-  'expense.date_updated',
+  // Expense state transitions.
+  'expense.state.pending',
+  'expense.state.awaiting',
+  'expense.state.booked',
+  'expense.state.initialized',
+  'expense.state.paid',
+  'expense.state.paused',
+  'expense.state.refunded',
+  'expense.state.cancelled',
+  // Field/action events.
+  'expense.vendor.updated',
+  'expense.amount.updated',
+  'expense.amountlines.updated',
+  'expense.label.updated',
+  'expense.note.updated',
+  'expense.item.updated',
+  'expense.date.updated',
+  'expense.type.updated',
+  'expense.invoicenumber.updated',
+  'expense.paymentdate.updated',
+  'expense.category.updated',
+  'expense.department.updated',
+  'expense.creditnote.linked',
+  'payment.updated',
+  'expense.approval.declined',
+  'expense.approval.approved',
+  'expense.approver.added',
 ] as const;
 
-export const ENDPOINT_OPERATIONS: EndpointOperation[] = buildEndpointOperations();
-
 export const CURATED_CAPABILITIES: Capability[] = [
-  tool('corpay_check_connection', 'Check Corpay One connection', 'Validate credentials and return account context.', 'read', ['auth', 'setup']),
+  tool('corpay_check_connection', 'Check Corpay One connection', 'Validate OAuth credentials and list accessible teams.', 'read', ['auth', 'setup', 'teams']),
   tool('corpay_search_capabilities', 'Search capabilities', 'Find supported tools and allowlisted endpoint operations.', 'read', ['discovery']),
-  tool('corpay_list_expenses', 'List expenses', 'List expenses (bills/documents), filterable by approval status.', 'read', ['expense', 'bill', 'approval']),
-  tool('corpay_get_expense', 'Get expense', 'Read one expense including vendor, amounts, line items, and coding.', 'read', ['expense', 'bill']),
-  tool('corpay_prepare_expense_coding', 'Prepare expense coding', 'Dry-run set of an expense’s category (account) and labels (project, cost type).', 'draft', ['expense', 'coding', 'category', 'label', 'project', 'write']),
+  tool('corpay_list_expenses', 'List expenses', 'List expenses (bills/documents), filterable by state. Requires teamId.', 'read', ['expense', 'bill', 'approval']),
+  tool('corpay_get_expense', 'Get expense', 'Read full detail for one expense, incl. vendor, amounts, lines, coding.', 'read', ['expense', 'bill']),
+  tool('corpay_prepare_expense_coding', 'Prepare expense coding', 'Dry-run update of an expense’s coding — category (account), label, department.', 'draft', ['expense', 'coding', 'category', 'label', 'write']),
   tool('corpay_commit_prepared_operation', 'Commit prepared operation', 'Execute a prepared, policy-checked write with a confirmation hash.', 'commit', ['write']),
+  tool('corpay_list_webhooks', 'List webhooks', 'List active webhook subscriptions.', 'read', ['webhook']),
+  tool('corpay_prepare_webhook_change', 'Prepare webhook change', 'Dry-run create/update/delete of a webhook subscription.', 'draft', ['webhook', 'write']),
   tool('corpay_call_endpoint', 'Call allowlisted endpoint', 'Call a validated, allowlisted Corpay One endpoint (read unless policy permits).', 'read', ['advanced']),
 ];
 
@@ -112,23 +130,6 @@ export function materializePath(
     }
     return encodeURIComponent(String(value));
   });
-}
-
-function buildEndpointOperations(): EndpointOperation[] {
-  const operations: EndpointOperation[] = [];
-  for (const { resource, writable } of CORPAY_RESOURCES) {
-    operations.push(
-      { id: id('GET', `/${resource}`), method: 'GET', pathTemplate: `/${resource}`, summary: `List ${resource}.`, risk: 'read' },
-      { id: id('GET', `/${resource}/{id}`), method: 'GET', pathTemplate: `/${resource}/{id}`, summary: `Get one ${resource} item.`, risk: 'read' },
-    );
-    if (writable) {
-      operations.push(
-        { id: id('POST', `/${resource}`), method: 'POST', pathTemplate: `/${resource}`, summary: `Create ${resource}.`, risk: 'commit' },
-        { id: id('PATCH', `/${resource}/{id}`), method: 'PATCH', pathTemplate: `/${resource}/{id}`, summary: `Update one ${resource} item.`, risk: 'commit' },
-      );
-    }
-  }
-  return operations;
 }
 
 function id(method: string, pathTemplate: string): string {

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Built the client against the official Corpay One API contract: OAuth 2.0
+  (authorization_code + refresh_token, auto-refreshed Bearer access tokens),
+  `/external` base with version-prefixed endpoints (`GET /v1/teams`,
+  `GET /v2/expenses`, `GET /v3/expenses/{id}`, `*/v1/webhooks`), staging/production
+  host selection, and `teamId` handling. Added the full documented webhook event
+  set, `X-Roger-Signature` validation (`validateWebhookSignature`), a one-time
+  `npm run auth:grant` token-capture helper, and webhook tools.
 - Modeled the connector on Corpay One's documented domain (public docs): the
   core entity is the **expense**, coded with a **category** (GL account) and
   **labels** (project, cost type, ...). Added the documented webhook event list.
