@@ -88,14 +88,21 @@ describe('gateway contract', () => {
     expect(list.content[0]?.type).toBe('text');
     expect(Array.isArray((list.structuredContent as { items: unknown[] }).items)).toBe(true);
 
+    const categories = await gateway.callTool('list_categories');
+    expect(Array.isArray((categories.structuredContent as { categories: unknown[] }).categories)).toBe(true);
+
     const write = await gateway.callTool('write_expense_coding', {
       id: 'exp_1',
-      category: 1310,
-      labels: { project: 7 },
+      categoryId: 'gR39ejaL',
+      labelIds: ['lbl_7'],
     });
-    const structured = write.structuredContent as { updated: boolean; category: unknown };
+    const structured = write.structuredContent as {
+      updated: boolean;
+      patch: Array<{ op: string; path: string; value: unknown }>;
+    };
     expect(structured.updated).toBe(true);
-    expect(structured.category).toBe(1310);
+    expect(structured.patch).toContainEqual({ op: 'add', path: '/categoryId', value: 'gR39ejaL' });
+    expect(structured.patch).toContainEqual({ op: 'add', path: '/labelIds', value: ['lbl_7'] });
 
     const unknown = await gateway.callTool('nope');
     expect(unknown.isError).toBe(true);
