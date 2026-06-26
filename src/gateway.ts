@@ -1,5 +1,5 @@
 import { CorpayClient, type QueryValue } from './corpay/client.js';
-import { checkPolicy } from './corpay/policy.js';
+import { checkPolicy, loadPolicy } from './corpay/policy.js';
 import { formatUnknownError } from './errors.js';
 
 // Re-exported so Borgels control-plane runtimes can validate inbound Corpay One
@@ -99,7 +99,7 @@ export const corpayGatewayTools: GatewayToolDefinition[] = [
     name: 'write_expense_coding',
     title: 'Write expense coding',
     description:
-      'Set an expense’s coding via RFC 6902 JSON Patch: categoryId (the Corpay category id from list_categories), labelIds, and departmentIds. Write — disabled by default; gated by CORPAYONE_ENABLE_WRITES.',
+      'Set an expense’s coding via RFC 6902 JSON Patch: categoryId (the Corpay category id from list_categories), labelIds, and departmentIds. Write — disabled by default; enable via the gateway’s enableWrites option or the CORPAYONE_ENABLE_WRITES env flag.',
     riskLevel: 'write',
     enabledByDefault: false,
     inputSchema: {
@@ -143,6 +143,13 @@ export interface CorpayGatewayOptions {
   env?: 'staging' | 'production';
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /**
+   * Enable coding writes for this gateway instance. A control plane that wraps
+   * the gateway and applies its own write governance (scopes, approvals, audit)
+   * passes `true` to opt in, instead of relying on the CORPAYONE_ENABLE_WRITES
+   * environment flag used by the standalone server. Defaults to the env flag.
+   */
+  enableWrites?: boolean;
   /** Deterministic, no-network fixture mode for review/demo automation. */
   contractMode?: boolean;
 }
@@ -166,6 +173,10 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
     timeoutMs: options.timeoutMs,
   });
   const teamId = options.teamId ?? process.env.CORPAYONE_TEAM_ID ?? '';
+  // Writes are permitted when the embedder opts in via `enableWrites` or the
+  // standalone CORPAYONE_ENABLE_WRITES env flag; the rest of the write policy
+  // (allowed methods/paths/amount) still applies on top.
+  const writePolicy = options.enableWrites ? { ...loadPolicy(), writesEnabled: true } : loadPolicy();
   return {
     tools: corpayGatewayTools,
     async callTool(name, args = {}) {
@@ -236,11 +247,14 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
           case 'write_expense_coding': {
             // Coding is written via RFC 6902 JSON Patch. categoryId is the Corpay
             // category id (from list_categories), not the GL number.
-            const decision = checkPolicy({
-              capability: 'corpay_write_expense_coding',
-              method: 'PATCH',
-              path: `/v2/expenses/${String(args.id)}`,
-            });
+            const decision = checkPolicy(
+              {
+                capability: 'corpay_write_expense_coding',
+                method: 'PATCH',
+                path: `/v2/expenses/${String(args.id)}`,
+              },
+              writePolicy,
+            );
             if (!decision.allowed) return errorResult(`Blocked by policy: ${decision.reason}`);
             const ops = codingPatch(args);
             if (ops.length === 0) return errorResult('No coding fields supplied.');
