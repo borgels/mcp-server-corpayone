@@ -99,7 +99,8 @@ must be re-allowed explicitly in a policy file.
 `createCorpayGateway(options)` so the Borgels control plane (mcp.borgels.com) can
 wrap Corpay One as a provider without copying connector logic, exactly like the
 e-conomic gateway. Reads (`check_connection`, `list_expenses`, `get_expense`,
-`list_categories`) are enabled by default; `write_expense_coding` is a write,
+`list_categories`, `list_coding_options`) are enabled by default;
+`write_expense_coding` is a write,
 disabled by default and gated by the connector write policy. It sets a bill's
 coding (`categoryId`/`labelIds`/`departmentIds`) via an RFC 6902 JSON Patch — it
 does not approve the bill. `contractMode: true` returns deterministic fixtures

@@ -87,6 +87,15 @@ export const corpayGatewayTools: GatewayToolDefinition[] = [
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
   },
   {
+    name: 'list_coding_options',
+    title: 'List coding options',
+    description:
+      'List every writable coding option for expenses in one call: categories (GL accounts) with their Corpay id + GL number, and label lists (e.g. project, cost type) with each label’s Corpay id and externalId (the source-system number). These ids are what write_expense_coding consumes.',
+    riskLevel: 'read',
+    enabledByDefault: true,
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
     name: 'write_expense_coding',
     title: 'Write expense coding',
     description:
@@ -107,6 +116,24 @@ export const corpayGatewayTools: GatewayToolDefinition[] = [
     },
   },
 ];
+
+// Minimal upstream shapes used when assembling list_coding_options. Kept local
+// to the gateway; the tool returns these straight through as GatewayJsonValue.
+interface CorpayCategory {
+  id: string;
+  number?: string;
+  name?: string;
+}
+interface CorpayListSummary {
+  id: string;
+  name?: string;
+  type?: string;
+}
+interface CorpayLabel {
+  id: string;
+  externalId?: string | null;
+  value?: string | null;
+}
 
 export interface CorpayGatewayOptions {
   clientId?: string;
@@ -168,6 +195,44 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
             });
             return jsonResult('Listed Corpay One categories.', { categories: data?.data?.categories ?? [] });
           }
+          case 'list_coding_options': {
+            // One call returns everything writable: categories (GL accounts) plus
+            // each label list (project, cost type, …) with its labels. Label/category
+            // ids are what write_expense_coding consumes; externalId carries the
+            // source-system number so callers can resolve by GL/project number.
+            const [catData, listsData] = await Promise.all([
+              client.request<{ data?: { categories?: CorpayCategory[] } }>({
+                method: 'GET',
+                path: `/v1/teams/${teamId}/categories`,
+                withTeamId: false,
+              }),
+              client.request<{ data?: { lists?: CorpayListSummary[] } }>({
+                method: 'GET',
+                path: `/v1/teams/${teamId}/lists`,
+                withTeamId: false,
+              }),
+            ]);
+            const summaries = listsData?.data?.lists ?? [];
+            const lists = await Promise.all(
+              summaries.map(async (summary) => {
+                const detail = await client.request<{ data?: { list?: { labels?: CorpayLabel[] } } }>({
+                  method: 'GET',
+                  path: `/v1/teams/${teamId}/lists/${summary.id}`,
+                  withTeamId: false,
+                });
+                const labels = (detail?.data?.list?.labels ?? []).map((label) => ({
+                  id: label.id,
+                  externalId: label.externalId ?? null,
+                  value: label.value ?? null,
+                }));
+                return { id: summary.id, name: summary.name ?? null, type: summary.type ?? null, labels };
+              }),
+            );
+            return jsonResult('Listed Corpay One coding options.', {
+              categories: catData?.data?.categories ?? [],
+              lists,
+            });
+          }
           case 'write_expense_coding': {
             // Coding is written via RFC 6902 JSON Patch. categoryId is the Corpay
             // category id (from list_categories), not the GL number.
@@ -221,6 +286,27 @@ function contractToolResult(name: string, args: GatewayJsonObject): GatewayToolR
         categories: [
           { id: 'cat_1310', number: '1310', name: 'Direkte omkostninger m/moms' },
           { id: 'cat_9900', number: '9900', name: 'Analyse/fejlkonto' },
+        ],
+      });
+    case 'list_coding_options':
+      return jsonResult('Listed Corpay One coding options.', {
+        categories: [
+          { id: 'cat_1310', number: '1310', name: 'Direkte omkostninger m/moms' },
+          { id: 'cat_9900', number: '9900', name: 'Analyse/fejlkonto' },
+        ],
+        lists: [
+          {
+            id: 'list_projects',
+            name: 'Projekter',
+            type: 'EconomicProjects',
+            labels: [{ id: 'lbl_p1', externalId: '1', value: '1 Demo project' }],
+          },
+          {
+            id: 'list_costtypes',
+            name: 'Omkostningstype',
+            type: 'EconomicCostNumbers',
+            labels: [{ id: 'lbl_c1', externalId: '1', value: '1 Materialer' }],
+          },
         ],
       });
     case 'write_expense_coding':
