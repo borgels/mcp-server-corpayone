@@ -91,6 +91,12 @@ describe('gateway contract', () => {
     const categories = await gateway.callTool('list_categories');
     expect(Array.isArray((categories.structuredContent as { categories: unknown[] }).categories)).toBe(true);
 
+    const options = await gateway.callTool('list_coding_options');
+    const optsSc = options.structuredContent as { categories: unknown[]; lists: Array<{ labels: unknown[] }> };
+    expect(Array.isArray(optsSc.categories)).toBe(true);
+    expect(Array.isArray(optsSc.lists)).toBe(true);
+    expect(Array.isArray(optsSc.lists[0]?.labels)).toBe(true);
+
     const write = await gateway.callTool('write_expense_coding', {
       id: 'exp_1',
       categoryId: 'gR39ejaL',
