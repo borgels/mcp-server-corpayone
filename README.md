@@ -32,9 +32,9 @@ npm run build
 
 Auth is OAuth 2.0 (authorization_code + refresh_token). Create an app at
 `https://web.<env>.corpayone.com/developers` with scopes `expenses.all`,
-`webhooks.all`, `teams.all` (reads the category list for coding writes),
-`offline_access` and a redirect URI matching `CORPAYONE_REDIRECT_URI`. Then
-capture a refresh token once:
+`webhooks.all`, `teams.categories.all` (reads the category list for coding
+writes), `offline_access` and a redirect URI matching `CORPAYONE_REDIRECT_URI`.
+Then capture a refresh token once:
 
 ```sh
 export CORPAYONE_ENV=staging   # or production
@@ -98,8 +98,12 @@ must be re-allowed explicitly in a policy file.
 `mcp-server-corpayone/gateway` exports `corpayGatewayTools` and
 `createCorpayGateway(options)` so the Borgels control plane (mcp.borgels.com) can
 wrap Corpay One as a provider without copying connector logic, exactly like the
-e-conomic gateway. All gateway tools are read-only. `contractMode: true` returns
-deterministic fixtures with no network calls.
+e-conomic gateway. Reads (`check_connection`, `list_expenses`, `get_expense`,
+`list_categories`) are enabled by default; `write_expense_coding` is a write,
+disabled by default and gated by the connector write policy. It sets a bill's
+coding (`categoryId`/`labelIds`/`departmentIds`) via an RFC 6902 JSON Patch — it
+does not approve the bill. `contractMode: true` returns deterministic fixtures
+with no network calls.
 
 ## Verification
 
