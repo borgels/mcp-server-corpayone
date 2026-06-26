@@ -32,8 +32,9 @@ npm run build
 
 Auth is OAuth 2.0 (authorization_code + refresh_token). Create an app at
 `https://web.<env>.corpayone.com/developers` with scopes `expenses.all`,
-`webhooks.all`, `offline_access` and a redirect URI matching
-`CORPAYONE_REDIRECT_URI`. Then capture a refresh token once:
+`webhooks.all`, `teams.all` (reads the category list for coding writes),
+`offline_access` and a redirect URI matching `CORPAYONE_REDIRECT_URI`. Then
+capture a refresh token once:
 
 ```sh
 export CORPAYONE_ENV=staging   # or production
