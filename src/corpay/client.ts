@@ -137,7 +137,11 @@ export class CorpayClient {
       Authorization: `Bearer ${token}`,
       ...options.headers,
     };
-    if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+    // Default to JSON, but respect a caller-provided Content-Type (e.g.
+    // application/json-patch+json for RFC 6902 expense updates).
+    if (options.body !== undefined && !headers['Content-Type'] && !headers['content-type']) {
+      headers['Content-Type'] = 'application/json';
+    }
     if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
 
     const response = await this.fetchImpl(url, {

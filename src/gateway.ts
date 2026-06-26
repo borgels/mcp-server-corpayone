@@ -1,5 +1,5 @@
 import { CorpayClient, type QueryValue } from './corpay/client.js';
-import { prepareOperation, executePreparedOperation } from './corpay/operations.js';
+import { checkPolicy } from './corpay/policy.js';
 import { formatUnknownError } from './errors.js';
 
 // Re-exported so Borgels control-plane runtimes can validate inbound Corpay One
@@ -78,19 +78,28 @@ export const corpayGatewayTools: GatewayToolDefinition[] = [
     },
   },
   {
+    name: 'list_categories',
+    title: 'List categories',
+    description:
+      'List the team’s coding categories (GL accounts) with their Corpay category id, number, and name — the writable coding options.',
+    riskLevel: 'read',
+    enabledByDefault: true,
+    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+  },
+  {
     name: 'write_expense_coding',
     title: 'Write expense coding',
     description:
-      'Set an expense’s coding: category (GL account), labels (project/cost type), and department. Write — disabled by default; requires CORPAYONE_ENABLE_WRITES and the live PATCH endpoint to be confirmed.',
+      'Set an expense’s coding via RFC 6902 JSON Patch: categoryId (the Corpay category id from list_categories), labelIds, and departmentIds. Write — disabled by default; gated by CORPAYONE_ENABLE_WRITES.',
     riskLevel: 'write',
     enabledByDefault: false,
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: ['string', 'number'] },
-        category: {},
-        labels: {},
-        department: {},
+        categoryId: { type: ['string', 'null'] },
+        labelIds: { type: 'array', items: { type: 'string' } },
+        departmentIds: { type: 'array', items: { type: 'string' } },
         idempotencyKey: { type: 'string' },
       },
       required: ['id'],
@@ -129,21 +138,15 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
     fetchImpl: options.fetchImpl,
     timeoutMs: options.timeoutMs,
   });
+  const teamId = options.teamId ?? process.env.CORPAYONE_TEAM_ID ?? '';
   return {
     tools: corpayGatewayTools,
     async callTool(name, args = {}) {
       try {
         switch (name) {
           case 'check_connection': {
-            // Validate credentials by acquiring an OAuth access token. We do not
-            // call /v1/teams: with the expenses/webhooks scopes it returns 403,
-            // and expenses/webhooks reads require a teamId (the slug from the
-            // Corpay One URL or webhook payload), which is configured per use.
             await client.getAccessToken();
-            return jsonResult('Corpay One credentials are valid (OAuth token acquired).', {
-              ok: true,
-              note: 'Set teamId to read expenses or manage webhooks.',
-            });
+            return jsonResult('Corpay One credentials are valid (OAuth token acquired).', { ok: true });
           }
           case 'list_expenses':
             return jsonResult(
@@ -155,27 +158,34 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
               'Fetched Corpay One expense.',
               await client.request({ method: 'GET', path: `/v3/expenses/${String(args.id)}` }),
             );
+          case 'list_categories': {
+            // Categories (GL accounts) with their Corpay id/number/name — the
+            // writable coding options. Requires the teams.categories scope.
+            const data = await client.request<{ data?: { categories?: unknown } }>({
+              method: 'GET',
+              path: `/v1/teams/${teamId}/categories`,
+              withTeamId: false,
+            });
+            return jsonResult('Listed Corpay One categories.', { categories: data?.data?.categories ?? [] });
+          }
           case 'write_expense_coding': {
-            // Route through the connector's prepare -> commit so its allowlist,
-            // write policy, and operation hash apply. PATCH path is provisional
-            // until confirmed against the live Swagger.
-            const op = prepareOperation({
+            // Coding is written via RFC 6902 JSON Patch. categoryId is the Corpay
+            // category id (from list_categories), not the GL number.
+            const decision = checkPolicy({
               capability: 'corpay_write_expense_coding',
               method: 'PATCH',
-              pathTemplate: '/v2/expenses/{id}',
-              pathParams: { id: String(args.id) },
-              body: codingBody(args),
-              reason: 'gateway write_expense_coding',
+              path: `/v2/expenses/${String(args.id)}`,
             });
-            if (!op.policyAllowed) {
-              return errorResult(`Blocked by policy: ${op.policyReason}`);
-            }
-            const result = await executePreparedOperation(
-              client,
-              op,
-              op.operationHash,
-              typeof args.idempotencyKey === 'string' ? args.idempotencyKey : op.operationHash,
-            );
+            if (!decision.allowed) return errorResult(`Blocked by policy: ${decision.reason}`);
+            const ops = codingPatch(args);
+            if (ops.length === 0) return errorResult('No coding fields supplied.');
+            const result = await client.request({
+              method: 'PATCH',
+              path: `/v2/expenses/${String(args.id)}`,
+              body: ops,
+              headers: { 'Content-Type': 'application/json-patch+json' },
+              idempotencyKey: typeof args.idempotencyKey === 'string' ? args.idempotencyKey : undefined,
+            });
             return jsonResult('Updated Corpay One expense coding.', result ?? { ok: true });
           }
           default:
@@ -191,10 +201,7 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
 function contractToolResult(name: string, args: GatewayJsonObject): GatewayToolResult {
   switch (name) {
     case 'check_connection':
-      return jsonResult('Corpay One credentials are valid (OAuth token acquired).', {
-        ok: true,
-        note: 'Set teamId to read expenses or manage webhooks.',
-      });
+      return jsonResult('Corpay One credentials are valid (OAuth token acquired).', { ok: true });
     case 'list_expenses':
       return jsonResult('Listed Corpay One expenses.', {
         items: [{ id: 'exp_1', state: 'booked', type: 'bill', amount: 1234.56 }],
@@ -209,11 +216,18 @@ function contractToolResult(name: string, args: GatewayJsonObject): GatewayToolR
         labels: [],
         lines: [],
       });
+    case 'list_categories':
+      return jsonResult('Listed Corpay One categories.', {
+        categories: [
+          { id: 'cat_1310', number: '1310', name: 'Direkte omkostninger m/moms' },
+          { id: 'cat_9900', number: '9900', name: 'Analyse/fejlkonto' },
+        ],
+      });
     case 'write_expense_coding':
       return jsonResult('Updated Corpay One expense coding.', {
         id: String(args.id ?? 'exp_1'),
         updated: true,
-        ...codingBody(args),
+        patch: codingPatch(args),
       });
     default:
       return errorResult(`Unsupported Corpay One gateway tool: ${name}`);
@@ -236,13 +250,14 @@ function toQuery(args: GatewayJsonObject): Record<string, QueryValue> {
   return query;
 }
 
-/** Build the coding payload from gateway args, including only provided fields. */
-function codingBody(args: GatewayJsonObject): Record<string, unknown> {
-  const body: Record<string, unknown> = {};
-  if (args.category !== undefined) body.category = args.category;
-  if (args.labels !== undefined) body.labels = args.labels;
-  if (args.department !== undefined) body.department = args.department;
-  return body;
+// Build an RFC 6902 JSON Patch from the supplied coding fields. categoryId is the
+// Corpay category id (from list_categories); labelIds/departmentIds are id arrays.
+function codingPatch(args: GatewayJsonObject): Array<{ op: string; path: string; value: unknown }> {
+  const ops: Array<{ op: string; path: string; value: unknown }> = [];
+  if (args.categoryId !== undefined) ops.push({ op: 'add', path: '/categoryId', value: args.categoryId });
+  if (Array.isArray(args.labelIds)) ops.push({ op: 'add', path: '/labelIds', value: args.labelIds });
+  if (Array.isArray(args.departmentIds)) ops.push({ op: 'add', path: '/departmentIds', value: args.departmentIds });
+  return ops;
 }
 
 function jsonResult(text: string, structuredContent: unknown): GatewayToolResult {
