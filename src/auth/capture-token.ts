@@ -38,7 +38,7 @@ const apiBase =
 const clientId = process.env.CORPAYONE_CLIENT_ID;
 const clientSecret = process.env.CORPAYONE_CLIENT_SECRET;
 const redirectUri = process.env.CORPAYONE_REDIRECT_URI ?? 'http://localhost:53682/corpayone/callback';
-const scope = 'expenses.all webhooks.all offline_access';
+const scope = 'expenses.all webhooks.all teams.all offline_access';
 
 if (!clientId || !clientSecret) {
   console.error('Set CORPAYONE_CLIENT_ID and CORPAYONE_CLIENT_SECRET first.');
