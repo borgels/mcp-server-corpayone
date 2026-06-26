@@ -113,4 +113,44 @@ describe('gateway contract', () => {
     const unknown = await gateway.callTool('nope');
     expect(unknown.isError).toBe(true);
   });
+
+  it('gates the coding write on enableWrites', async () => {
+    // Without enableWrites (and no CORPAYONE_ENABLE_WRITES env), the write is
+    // blocked by policy before any network call.
+    const blocked = await createCorpayGateway({ env: 'production' }).callTool('write_expense_coding', {
+      id: 'exp_1',
+      categoryId: 'gR39ejaL',
+    });
+    expect(blocked.isError).toBe(true);
+    expect(blocked.content[0]?.text ?? '').toMatch(/writes disabled/i);
+
+    // With enableWrites, the write proceeds to the PATCH call.
+    const calls: Array<{ url: string; method?: string }> = [];
+    const fetchImpl = (async (url: string | URL | Request, init?: RequestInit) => {
+      const href = String(url);
+      if (href.includes('/connect/token')) {
+        return new Response(JSON.stringify({ access_token: 't', expires_in: 3600 }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
+      calls.push({ url: href, method: init?.method });
+      return new Response(JSON.stringify({ data: { ok: true } }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const enabled = await createCorpayGateway({
+      env: 'production',
+      enableWrites: true,
+      clientId: 'c',
+      clientSecret: 's',
+      refreshToken: 'r',
+      teamId: 'TEAM',
+      fetchImpl,
+    }).callTool('write_expense_coding', { id: 'exp_1', categoryId: 'gR39ejaL' });
+    expect(enabled.isError).toBeFalsy();
+    expect(calls.some((call) => call.method === 'PATCH')).toBe(true);
+  });
 });
