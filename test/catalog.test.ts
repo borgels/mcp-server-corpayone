@@ -108,7 +108,7 @@ describe('gateway contract', () => {
     };
     expect(structured.updated).toBe(true);
     expect(structured.patch).toContainEqual({ op: 'add', path: '/categoryId', value: 'gR39ejaL' });
-    expect(structured.patch).toContainEqual({ op: 'add', path: '/labelIds', value: ['lbl_7'] });
+    expect(structured.patch).toContainEqual({ op: 'add', path: '/labels', value: ['lbl_7'] });
 
     const unknown = await gateway.callTool('nope');
     expect(unknown.isError).toBe(true);
