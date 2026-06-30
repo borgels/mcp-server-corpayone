@@ -256,7 +256,20 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
               writePolicy,
             );
             if (!decision.allowed) return errorResult(`Blocked by policy: ${decision.reason}`);
-            const ops = codingPatch(args);
+            // Pick add vs replace per field from the expense's current coding:
+            // Corpay 500s on `add` to an already-set scalar (e.g. its
+            // auto-assigned category) and requires `replace`; an unset field
+            // requires `add`.
+            const detail = await client.request<{
+              data?: { category?: unknown; labels?: unknown[]; departments?: unknown[] };
+            }>({ method: 'GET', path: `/v3/expenses/${String(args.id)}` });
+            const cur = detail?.data ?? {};
+            const present: CodingPresence = {
+              hasCategory: isCodingPresent(cur.category),
+              hasLabels: Array.isArray(cur.labels) && cur.labels.length > 0,
+              hasDepartments: Array.isArray(cur.departments) && cur.departments.length > 0,
+            };
+            const ops = codingPatch(args, present);
             if (ops.length === 0) return errorResult('No coding fields supplied.');
             const result = await client.request({
               method: 'PATCH',
@@ -350,14 +363,44 @@ function toQuery(args: GatewayJsonObject): Record<string, QueryValue> {
   return query;
 }
 
+// Which coding fields are already populated on the expense, so each patch op
+// uses the right verb (replace when set, add when unset).
+interface CodingPresence {
+  hasCategory?: boolean;
+  hasLabels?: boolean;
+  hasDepartments?: boolean;
+}
+
 // Build an RFC 6902 JSON Patch from the supplied coding fields. categoryId is the
 // Corpay category id (from list_categories); labelIds/departmentIds are id arrays.
-function codingPatch(args: GatewayJsonObject): Array<{ op: string; path: string; value: unknown }> {
+// Confirmed against the live API: the writable paths are `/categoryId` (scalar),
+// `/labels` and `/departments` (plain id arrays). An already-set field must use
+// `replace` (Corpay 500s on `add` to a populated scalar); an unset field uses
+// `add`. Empty/absent inputs are skipped rather than clearing the field.
+function codingPatch(
+  args: GatewayJsonObject,
+  current: CodingPresence = {},
+): Array<{ op: string; path: string; value: unknown }> {
   const ops: Array<{ op: string; path: string; value: unknown }> = [];
-  if (args.categoryId !== undefined) ops.push({ op: 'add', path: '/categoryId', value: args.categoryId });
-  if (Array.isArray(args.labelIds)) ops.push({ op: 'add', path: '/labelIds', value: args.labelIds });
-  if (Array.isArray(args.departmentIds)) ops.push({ op: 'add', path: '/departmentIds', value: args.departmentIds });
+  const verb = (present?: boolean) => (present ? 'replace' : 'add');
+  if (args.categoryId !== undefined && args.categoryId !== null) {
+    ops.push({ op: verb(current.hasCategory), path: '/categoryId', value: args.categoryId });
+  }
+  if (Array.isArray(args.labelIds) && args.labelIds.length > 0) {
+    ops.push({ op: verb(current.hasLabels), path: '/labels', value: args.labelIds });
+  }
+  if (Array.isArray(args.departmentIds) && args.departmentIds.length > 0) {
+    ops.push({ op: verb(current.hasDepartments), path: '/departments', value: args.departmentIds });
+  }
   return ops;
+}
+
+// A coding field counts as present when it carries a value/id (Corpay returns
+// category as an object { id, … } and labels/departments as arrays).
+function isCodingPresent(value: unknown): boolean {
+  if (value === null || value === undefined) return false;
+  if (typeof value === 'object') return Boolean((value as { id?: unknown }).id);
+  return Boolean(value);
 }
 
 function jsonResult(text: string, structuredContent: unknown): GatewayToolResult {
