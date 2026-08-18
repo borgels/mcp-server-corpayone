@@ -194,7 +194,7 @@ export const CURATED_CAPABILITIES: Capability[] = [
   tool('corpay_prepare_expense_amount_lines', 'Prepare expense split', 'Dry-run splitting an expense into several coded amount lines.', 'draft', ['coding', 'split', 'lines', 'write']),
   tool('corpay_prepare_card_transaction_coding', 'Prepare card transaction coding', 'Dry-run the bookkeeping details of a credit account transaction.', 'draft', ['card', 'coding', 'write'], 'cardtransactions.all'),
   tool('corpay_prepare_vendor_change', 'Prepare vendor change', 'Dry-run creating a vendor or setting its external id.', 'draft', ['vendor', 'write']),
-  tool('corpay_prepare_coding_list_change', 'Prepare coding list change', 'Dry-run a change to categories, departments, label lists or items.', 'draft', ['category', 'department', 'label', 'item', 'write']),
+  tool('corpay_prepare_coding_list_change', 'Prepare coding list change', 'Dry-run a change to the coding vocabulary: categories and label lists, plus departments and items when the grant reaches them.', 'draft', ['category', 'department', 'label', 'item', 'write']),
   tool('corpay_prepare_webhook_change', 'Prepare webhook change', 'Dry-run creating, updating or deleting a webhook subscription.', 'draft', ['webhook', 'write']),
   tool('corpay_commit_prepared_operation', 'Commit prepared operation', 'Execute a prepared write after restating its hash.', 'commit', ['write', 'commit']),
   tool('corpay_prepare_expense_approval', 'Prepare expense approval', 'Dry-run approving or declining an expense. Approval releases a bill for payment.', 'draft', ['approval', 'approve', 'decline', 'payment']),
