@@ -1,6 +1,44 @@
 # Changelog
 
-## Unreleased
+## 1.0.0
+
+First release usable as a hosted, multi-company deployment.
+
+- **Team scoping is now a hard boundary.** One Corpay grant reaches every team
+  its user belongs to, and the team is chosen per request, so a server serving
+  one company could previously be steered to another by a caller supplying its
+  own `teamId`. `CORPAYONE_TEAM_ID` is now forced into every path, query and
+  request body, and a request naming a different team is rejected instead of
+  silently redirected.
+- **Approvals are gated separately from writes** (`CORPAYONE_ENABLE_APPROVALS`).
+  Approving an expense releases the bill for payment, so a server can be allowed
+  to code expenses without ever being able to approve them. The approve/decline
+  endpoints are reachable only through `corpay_commit_expense_approval`, and
+  that tool reaches nothing else.
+- **Endpoint allowlist generated from the published OpenAPI documents** — all
+  three versions, 79 operations, each classified read / commit / approval /
+  dangerous. Dangerous endpoints (team and member management, payment methods,
+  and every DELETE) are refused even when writes are enabled.
+- **Atomic expense coding.** `corpay_prepare_expense_coding` sets category,
+  labels and departments in one JSON Patch request, reads the expense first to
+  choose `add` or `replace` per field, and reports the current coding next to
+  the proposed change.
+- **Streamable HTTP transport, Dockerfile and GHCR publish**, so the server can
+  be run as a container behind a reverse proxy.
+- Prepare/commit ceremony aligned with the house pattern: stable hashing
+  independent of key order, a verify step that recovers a body the client
+  re-stringified in transit, and a policy re-check against the verified
+  operation rather than the caller's copy.
+- Curated tool surface expanded to 27 tools, covering expenses, coding options,
+  vendors, cards, members and webhooks.
+- `npm run auth:grant` now requests the full scope set the server needs; a grant
+  missing `departments.all` or the card scopes returns 403 on those reads only.
+- Added `npm run smoke:live`, a read-only live check that also asserts a
+  cross-team read is refused.
+- MCP `instructions` tell the client about minor-unit amounts, id-based coding,
+  and the two-step write ceremony.
+
+## 0.0.1
 
 - Gateway: added a `write_expense_coding` tool (risk `write`, disabled by default)
   that sets an expense's category/labels/department, routed through the

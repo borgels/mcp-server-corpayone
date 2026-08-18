@@ -38,7 +38,36 @@ const apiBase =
 const clientId = process.env.CORPAYONE_CLIENT_ID;
 const clientSecret = process.env.CORPAYONE_CLIENT_SECRET;
 const redirectUri = process.env.CORPAYONE_REDIRECT_URI ?? 'http://localhost:53682/corpayone/callback';
-const scope = 'expenses.all webhooks.all teams.categories.all offline_access';
+/**
+ * Scopes requested by the grant.
+ *
+ * Corpay declares scopes only globally in its OpenAPI documents, so this list
+ * was assembled from the resources the server reads and writes, and verified by
+ * running test/live-smoke.ts: a grant missing `departments.all` or the card
+ * scopes returns 403 on those reads while everything else works, which is easy
+ * to mistake for a broken endpoint.
+ *
+ * Override with CORPAYONE_SCOPE to request less.
+ */
+const DEFAULT_SCOPE = [
+  'expenses.all',
+  'expenses.approvers.read',
+  'teams.all',
+  'teams.categories.all',
+  'teams.lists.all',
+  'teams.vendors.all',
+  'teams.members.list',
+  'teams.modules.list',
+  'departments.all',
+  'items.read',
+  'items.write',
+  'payments.all',
+  'cardtransactions.all',
+  'webhooks.all',
+  'offline_access',
+].join(' ');
+
+const scope = process.env.CORPAYONE_SCOPE?.trim() || DEFAULT_SCOPE;
 
 if (!clientId || !clientSecret) {
   console.error('Set CORPAYONE_CLIENT_ID and CORPAYONE_CLIENT_SECRET first.');

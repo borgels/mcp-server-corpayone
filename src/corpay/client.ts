@@ -1,4 +1,5 @@
 import { CorpayHttpError } from '../errors.js';
+import { assertNoForeignTeam, assertTeamAllowed, isTeamKey, pinnedTeamId } from './team.js';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 export type QueryValue = string | number | boolean | null | undefined;
@@ -123,9 +124,18 @@ export class CorpayClient {
     const method = options.method ?? 'GET';
     const token = await this.getAccessToken();
 
+    // Team scoping is enforced here rather than at each call site, so no code
+    // path — including the generic endpoint tool — can reach another company.
     const query = { ...options.query };
-    if ((options.withTeamId ?? true) && this.teamId && query.teamId === undefined) {
-      query.teamId = this.teamId;
+    const team = this.teamId ?? pinnedTeamId();
+    if (team) {
+      assertNoForeignTeam(query as Record<string, unknown>, team);
+      for (const key of Object.keys(query)) {
+        if (isTeamKey(key)) delete query[key];
+      }
+      if (options.withTeamId ?? true) {
+        query.teamId = team;
+      }
     }
     const url = appendQuery(
       options.url ?? `${this.apiBaseUrl}${normalizePath(options.path ?? '/')}`,
@@ -144,10 +154,14 @@ export class CorpayClient {
     }
     if (options.idempotencyKey) headers['Idempotency-Key'] = options.idempotencyKey;
 
+    // Some payloads carry the team in the body instead (expense upload, webhook
+    // create), so the boundary has to be applied there as well.
+    const body = team ? scopeBodyTeam(options.body, team) : options.body;
+
     const response = await this.fetchImpl(url, {
       method,
       headers,
-      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      body: body === undefined ? undefined : JSON.stringify(body),
       signal: AbortSignal.timeout(this.timeoutMs),
     });
 
@@ -164,6 +178,30 @@ export class CorpayClient {
     }
     return payload as T;
   }
+}
+
+/**
+ * Rewrite any team identifier inside a request body to the pinned team, after
+ * rejecting one that disagrees. Recurses so nested objects and arrays (such as
+ * a batch of expenses) cannot smuggle a different team past the check.
+ */
+function scopeBodyTeam(value: unknown, team: string): unknown {
+  if (Array.isArray(value)) {
+    return value.map(item => scopeBodyTeam(item, team));
+  }
+  if (typeof value !== 'object' || value === null) {
+    return value;
+  }
+  const out: Record<string, unknown> = {};
+  for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+    if (isTeamKey(key)) {
+      assertTeamAllowed(nested, team);
+      out[key] = team;
+      continue;
+    }
+    out[key] = scopeBodyTeam(nested, team);
+  }
+  return out;
 }
 
 async function readResponseBody(response: Response): Promise<unknown> {
