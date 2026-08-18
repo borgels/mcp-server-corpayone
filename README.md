@@ -12,14 +12,13 @@ change is reviewed before it happens.
 
 **Read** — expenses (bills, receipts, credit notes) with their state, vendor,
 amounts, attachments and coding; the activity log and approver list for an
-expense; the coding vocabulary (categories, label lists, departments, items);
-vendors; credit accounts and card transactions; payment methods; team members;
-webhook subscriptions.
+expense; the coding vocabulary (categories, label lists and labels); vendors;
+webhook subscriptions. With broader scopes also credit accounts and card
+transactions, payment methods, team members, departments and items — see below.
 
-**Write** — code an expense (category, labels, departments, set atomically);
-split an expense into coded amount lines; code a card transaction; create
-vendors and set their external ids; maintain categories, departments, label
-lists and items; manage webhook subscriptions.
+**Write** — code an expense (category and labels, set atomically); split an
+expense into coded amount lines; create vendors and set their external ids;
+maintain categories and label lists; manage webhook subscriptions.
 
 **Approve** — approve or decline an expense awaiting approval. Gated separately;
 see below.
@@ -56,35 +55,42 @@ to capture a refresh token:
 npm run auth:grant
 ```
 
-### The scope ceiling
+### What the grant can reach
 
-`auth:grant` requests the seven scopes a Corpay app can actually obtain:
-`expenses.all`, `teams.all`, `teams.categories.all`, `teams.lists.all`,
-`teams.vendors.all`, `webhooks.all`, `offline_access`.
+A standard Corpay app registration can obtain exactly these scopes, and
+`auth:grant` requests them: `expenses.all`, `teams.all`,
+`teams.categories.all`, `teams.lists.all`, `teams.vendors.all`,
+`webhooks.all`, `offline_access`.
 
-Several endpoints in the API need scopes **beyond** that, and they cannot be
-obtained self-service. Asking for one makes the authorize call fail outright
-rather than issuing a narrower token, and — verified against the live service —
-adding it to the app in the developer portal is *not* enough either:
-`identity.corpayone.com` keeps its own client allowlist and still refuses the
-scope. Enabling them requires Corpay support.
+Some endpoints need more than that, and it is not obtainable self-service:
+asking for such a scope makes the authorize call fail outright, and adding it
+to the app in the developer portal is not enough either — verified against the
+live service, `identity.corpayone.com` keeps its own client allowlist and still
+refuses it. Enabling those needs Corpay support.
 
-Affected reads, which return 403 while everything else works:
+**So the server does not offer tools that cannot work.** With a standard grant
+these are simply absent, rather than present and failing:
 
-| Scope | What it unlocks |
+| Needs scope | Hidden tools / fields |
 |---|---|
-| `departments.all` | departments in `corpay_list_coding_options` |
-| `items.read` / `items.write` | items in `corpay_list_coding_options` |
-| `cardtransactions.all` | `corpay_list_credit_accounts`, card transactions |
+| `cardtransactions.all` | `corpay_list_credit_accounts`, `corpay_list_card_transactions`, `corpay_prepare_card_transaction_coding` |
 | `payments.all` | `corpay_list_payment_methods` |
 | `teams.members.list` | `corpay_list_team_members` |
-| `teams.modules.list` | modules in `corpay_get_company_context` |
-| `expenses.approvers.read` | `corpay_get_expense_approvers` |
+| `departments.all` | departments in `corpay_list_coding_options`, `departmentIds` on coding |
+| `items.read` / `items.write` | items in `corpay_list_coding_options`, item fields on amount lines |
 
-A 403 on any of these is reported with the scope it needs, rather than as a raw
-error. `npm run smoke:live` shows which are affected on a given grant, and
-`corpay_list_coding_options` degrades per source instead of failing wholesale —
-so expense coding via categories and labels works regardless.
+If Corpay grants more, list the scopes in `CORPAYONE_SCOPE` and the matching
+tools appear — the gate is configuration, not a code change.
+
+Everything central to accounts payable works on a standard grant: expenses and
+their full detail, activity log, **approvers**, categories, label lists and
+labels, vendors, webhooks, coding, and approvals. The scope map is measured
+against the live API rather than inferred from the OpenAPI documents, because
+the real behaviour does not follow the obvious pattern — `teams.all` covers
+`/teams/{id}/modules` but not `/teams/{id}/departments` or `/members`, and
+`expenses.all` covers `/expenses/{id}/approvers`. Re-run `npm run smoke:live`
+after changing a grant; it skips what the grant cannot reach instead of
+reporting it as a failure.
 
 ### Scoping the server to one company
 

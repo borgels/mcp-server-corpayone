@@ -11,6 +11,7 @@
  */
 import { CorpayClient } from '../src/corpay/client.js';
 import { pinnedTeamId } from '../src/corpay/team.js';
+import { grantedScopes, hasScope } from '../src/corpay/scopes.js';
 import { formatUnknownError } from '../src/errors.js';
 
 const client = new CorpayClient();
@@ -23,6 +24,28 @@ async function check(name: string, run: () => Promise<unknown>): Promise<void> {
   } catch (error) {
     failures += 1;
     console.log(`  FAIL  ${name}: ${formatUnknownError(error)}`);
+  }
+}
+
+/** Run only if the grant holds `scope`; otherwise record it as skipped. */
+async function optional(scope: string, name: string, run: () => Promise<unknown>): Promise<void> {
+  if (!hasScope(scope)) {
+    console.log(`  skip  ${name} (needs scope ${scope})`);
+    return;
+  }
+  await check(name, run);
+}
+
+async function firstExpenseId(c: CorpayClient): Promise<string | undefined> {
+  try {
+    const r = await c.request<{ data?: { bills?: Array<{ id?: string }> } }>({
+      method: 'GET',
+      path: '/v2/expenses',
+      query: { Count: 10 },
+    });
+    return r?.data?.bills?.[0]?.id;
+  } catch {
+    return undefined;
   }
 }
 
@@ -49,6 +72,8 @@ function summarize(result: unknown): string {
 async function main(): Promise<void> {
   const team = pinnedTeamId();
   console.log(`Corpay One live smoke test${team ? ` (team ${team})` : ' (no team pinned)'}`);
+  console.log(`scopes: ${[...grantedScopes()].sort().join(' ')}
+`);
 
   await check('GET /v1/teams', () =>
     client.request({ method: 'GET', path: '/v1/teams', withTeamId: false }),
@@ -70,8 +95,18 @@ async function main(): Promise<void> {
   await check('GET lists', () =>
     client.request({ method: 'GET', path: `${base}/lists`, withTeamId: false }),
   );
-  await check('GET departments', () =>
+  // Scope-gated reads are only exercised when the grant holds the scope; they
+  // are skipped rather than reported as failures, since a standard grant is
+  // expected not to reach them.
+  await optional('departments.all', 'GET departments', () =>
     client.request({ method: 'GET', path: `${base}/departments`, withTeamId: false }),
+  );
+  await optional('items.read', 'GET items', () =>
+    client.request({
+      method: 'GET',
+      path: `/v2/teams/${encodeURIComponent(team)}/items`,
+      withTeamId: false,
+    }),
   );
   await check('GET vendors', () =>
     client.request({
@@ -83,14 +118,33 @@ async function main(): Promise<void> {
   await check('GET expenses', () =>
     client.request({ method: 'GET', path: '/v2/expenses', query: { Count: 10 } }),
   );
-  await check('GET credit accounts', () =>
+  await optional('cardtransactions.all', 'GET credit accounts', () =>
     client.request({
       method: 'GET',
       path: `/v2/creditaccounts/team/${encodeURIComponent(team)}`,
       withTeamId: false,
     }),
   );
+  await optional('payments.all', 'GET payment methods', () =>
+    client.request({ method: 'GET', path: '/v1/payments/methods' }),
+  );
+  await optional('teams.members.list', 'GET members', () =>
+    client.request({ method: 'GET', path: `${base}/members`, withTeamId: false }),
+  );
   await check('GET webhooks', () => client.request({ method: 'GET', path: '/v1/webhooks' }));
+
+  const first = await firstExpenseId(client);
+  if (first) {
+    await check('GET expense (v3)', () =>
+      client.request({ method: 'GET', path: `/v3/expenses/${first}`, withTeamId: false }),
+    );
+    await check('GET expense activities', () =>
+      client.request({ method: 'GET', path: `/v2/expenses/${first}/activities` }),
+    );
+    await check('GET expense approvers', () =>
+      client.request({ method: 'GET', path: `/v2/expenses/${first}/approvers` }),
+    );
+  }
 
   // The boundary itself: asking for another team must not reach the network.
   await checkRejects('cross-team read is refused', () =>

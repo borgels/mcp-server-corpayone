@@ -91,7 +91,7 @@ describe('prepare/commit ceremony', () => {
     const op = prepareOperation({
       capability: 'corpay_prepare_coding_list_change',
       method: 'POST',
-      pathTemplate: '/v1/teams/{teamId}/departments',
+      pathTemplate: '/v1/teams/{teamId}/categories',
       reason: 'r',
     });
     expect(op.pathParams).toEqual({ teamId: 'TEAM_ALPHA' });
@@ -103,7 +103,7 @@ describe('prepare/commit ceremony', () => {
       prepareOperation({
         capability: 'corpay_prepare_coding_list_change',
         method: 'POST',
-        pathTemplate: '/v1/teams/{teamId}/departments',
+        pathTemplate: '/v1/teams/{teamId}/categories',
         pathParams: { teamId: 'TEAM_BETA' },
         reason: 'r',
       }),
