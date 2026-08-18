@@ -2,22 +2,22 @@ import { CorpayClient, type QueryValue } from './corpay/client.js';
 import { checkPolicy, loadPolicy } from './corpay/policy.js';
 import { formatUnknownError } from './errors.js';
 
-// Re-exported so Borgels control-plane runtimes can validate inbound Corpay One
+// Re-exported so an embedding control plane can validate inbound Corpay One
 // webhooks and filter event types without reaching into package internals.
 export { validateWebhookSignature } from './corpay/webhooks.js';
 export { WEBHOOK_EVENTS } from './corpay/catalog.js';
 
 /**
- * Borgels gateway contract for Corpay One.
+ * Gateway contract for Corpay One.
  *
- * Matches the e-conomic gateway shape exactly so the Borgels control plane
- * (mcp.borgels.com) can wrap Corpay One as a provider without copying connector
+ * Matches the e-conomic gateway shape exactly so an embedding control plane
+ * can wrap Corpay One as a provider without copying connector
  * logic: stable, unprefixed tool definitions (`riskLevel`/`enabledByDefault`) and
  * a `callTool` returning a `GatewayToolResult`. Reads are enabled by default; the
  * coding write is disabled by default and gated by the connector's write policy.
  */
 export type GatewayRiskLevel = 'read' | 'write' | 'destructive';
-// Structurally identical to the other Borgels connector gateways (e-conomic et al.)
+// Structurally identical to the sibling connector gateways (e-conomic et al.)
 // so this gateway plugs into the control plane's shared connector typing.
 export type GatewayJsonValue =
   | string

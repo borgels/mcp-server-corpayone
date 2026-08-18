@@ -1,121 +1,172 @@
 # mcp-server-corpayone
 
-TypeScript MCP server for the Corpay One API. Intentionally boring good: typed,
-documented, read-first, policy-aware, credential-sane, and audit-friendly. Same
-shape and security posture as the other Borgels `mcp-server-*` connectors.
+An MCP server for the [Corpay One](https://www.corpayone.com/) accounts-payable
+API: read bills and receipts, code them, manage the coding vocabulary, and — when
+explicitly enabled — approve or decline them.
 
-> **Disclaimer:** This is an independent, unofficial project by Borgels. Borgels
-> is not affiliated with, endorsed by, or supported by Corpay or Corpay One.
-> "Corpay" and "Corpay One" are referenced only to describe what this server
-> talks to. You need your own Corpay One credentials, and use of the Corpay One
-> API is subject to Corpay's own terms.
+Reads work out of the box. Every write is refused unless the server is
+configured to allow it, and each one goes through a prepare/commit ceremony so a
+change is reviewed before it happens.
 
-> **Status:** Scaffold. The endpoint map in `src/corpay/catalog.ts` is
-> provisional and gets verified against the live Corpay One API (read-first)
-> during connector bring-up before any write tools are enabled.
+## What it can do
 
-## Scope
+**Read** — expenses (bills, receipts, credit notes) with their state, vendor,
+amounts, attachments and coding; the activity log and approver list for an
+expense; the coding vocabulary (categories, label lists, departments, items);
+vendors; credit accounts and card transactions; payment methods; team members;
+webhook subscriptions.
 
-- Curated MCP tools for common accounts-payable workflows (bills, coding).
-- Discovery tools so clients can find supported resources and endpoint shapes.
-- A validated, allowlisted endpoint caller for long-tail coverage.
+**Write** — code an expense (category, labels, departments, set atomically);
+split an expense into coded amount lines; code a card transaction; create
+vendors and set their external ids; maintain categories, departments, label
+lists and items; manage webhook subscriptions.
 
-Default install mode is read-only. Writes require explicit environment opt-in,
-policy approval, a prepared operation hash, a reason, and an idempotency key.
+**Approve** — approve or decline an expense awaiting approval. Gated separately;
+see below.
 
-## Setup
+Start with `corpay_search_capabilities` to discover the tools and the
+allowlisted endpoints.
 
-```sh
+## Two things that will bite you
+
+**Amounts are in minor units.** An amount of `930000` is 9,300.00 DKK. This
+applies to everything the API returns and everything you send it.
+
+**Coding uses Corpay's internal ids, not accounting numbers.** A category has
+both an `id` and a `number`; the write takes the `id`, while the number is what
+a bookkeeper recognises. Always resolve ids with `corpay_list_coding_options`
+before coding, and match on the number or name found there.
+
+## Configuration
+
+Copy `.env.example` and fill it in. Credentials are read from the environment
+only — never from tool arguments.
+
+```
+CORPAYONE_CLIENT_ID=...
+CORPAYONE_CLIENT_SECRET=...
+CORPAYONE_REFRESH_TOKEN=...
+CORPAYONE_ENV=production
+```
+
+Create an app at `https://web.corpayone.com/developers`, then run the grant once
+to capture a refresh token:
+
+```bash
+npm run auth:grant
+```
+
+It requests the scopes the server needs. A grant missing `departments.all` or
+the card scopes still works for most calls but returns 403 on those specific
+reads, which is easy to mistake for a broken endpoint — `npm run smoke:live`
+will show you exactly which ones.
+
+### Scoping the server to one company
+
+One Corpay grant reaches **every team the user belongs to**, and the team is
+chosen per request. If you run one instance per company, set:
+
+```
+CORPAYONE_TEAM_ID=<team id>
+```
+
+The team then becomes a hard boundary: it is injected into every path, query and
+body, and a request naming a different team is rejected rather than quietly
+redirected. Without it, callers choose the team themselves — appropriate when
+the grant belongs to the person using it, but not when several people share one
+endpoint.
+
+Find team ids with `corpay_list_teams`.
+
+### Write policy
+
+Writes are off by default and are enabled in two independent steps:
+
+```
+CORPAYONE_ENABLE_WRITES=true      # coding, vendors, lists, webhooks
+CORPAYONE_ENABLE_APPROVALS=true   # approve / decline an expense
+```
+
+Approval is separate because approving a bill releases it for payment. A server
+can be allowed to code all day without ever being able to approve anything.
+
+Some endpoints are refused regardless: creating or deleting teams, managing
+members, and payment methods. Deleting a category, department, list or webhook
+is classified dangerous and is likewise refused. `CORPAYONE_POLICY_PATH` can
+point at a JSON file to narrow the policy further (or, deliberately, to widen
+it) — including `maxAmount`, compared in minor units.
+
+Set `CORPAYONE_AUDIT_LOG` to a file path to record one JSON line per write
+attempt. Idempotency keys are hashed rather than stored.
+
+### Preparing and committing
+
+No write tool sends anything. Each `corpay_prepare_*` tool validates the change
+against the allowlist and the policy and returns it with an `operationHash`.
+Pass that operation back to `corpay_commit_prepared_operation` — unchanged, with
+the hash restated and an `idempotencyKey` — to execute it. Editing the payload
+in between invalidates the hash.
+
+Approvals are committed with `corpay_commit_expense_approval` instead; the two
+commit tools will not accept each other's operations.
+
+`corpay_prepare_expense_coding` reads the expense first and reports its current
+coding alongside the proposed change, so the difference is visible before
+anything is committed.
+
+## Running it
+
+```bash
 npm install
 npm run build
+
+npm run dev        # stdio, for a desktop MCP client
+npm run dev:http   # Streamable HTTP on 127.0.0.1:3000/mcp
 ```
 
-Auth is OAuth 2.0 (authorization_code + refresh_token). Create an app at
-`https://web.<env>.corpayone.com/developers` with scopes `expenses.all`,
-`webhooks.all`, `teams.categories.all` (reads the category list for coding
-writes), `offline_access` and a redirect URI matching `CORPAYONE_REDIRECT_URI`.
-Then capture a refresh token once:
+A container image is published to
+`ghcr.io/borgels/mcp-server-corpayone`. It runs the HTTP transport:
 
-```sh
-export CORPAYONE_ENV=staging   # or production
-export CORPAYONE_CLIENT_ID="..."
-export CORPAYONE_CLIENT_SECRET="..."
-export CORPAYONE_REDIRECT_URI="http://localhost:53682/corpayone/callback"
-npm run auth:grant             # prints CORPAYONE_REFRESH_TOKEN
+```bash
+docker run --rm -p 3000:3000 --env-file corpayone.env \
+  ghcr.io/borgels/mcp-server-corpayone:latest
 ```
 
-The server reads all credentials from the environment only and never accepts
-them as tool arguments. Access tokens (~1h) are refreshed automatically.
+The HTTP transport binds to loopback by default and expects to sit behind a
+reverse proxy that terminates TLS and authenticates callers. `MCP_HTTP_TOKEN`
+adds a bearer check; `MCP_ALLOWED_ORIGINS` restricts browser origins.
 
-```sh
-export CORPAYONE_REFRESH_TOKEN="..."
-export CORPAYONE_WEBHOOK_SECRET="..."   # to validate inbound webhooks
-export CORPAYONE_TEAM_ID="..."          # company slug; see GET /v1/teams
+## Verifying a deployment
+
+```bash
+npm run typecheck && npm test        # offline
+CORPAYONE_TEAM_ID=<team> npm run smoke:live   # read-only, hits the real API
 ```
 
-Hosts are selected by `CORPAYONE_ENV`: staging uses
-`api.staging.corpayone.com/external` + `identity.staging.corpayone.com`;
-production uses `api.corpayone.com/external` + `identity.corpayone.com`.
+The live smoke test also asserts that a cross-team read is refused, so it
+doubles as a check that the boundary is actually in force.
 
-## Domain model
+## Webhooks
 
-Corpay One's core entity is the **expense** (an incoming bill/document awaiting
-coding and approval). Coding is split into a **category** (the GL account) and
-**labels** (configurable dimensions such as project and cost type). The connector
-follows this model; exact REST paths and field names are verified live during
-bring-up.
+`validateWebhookSignature` (exported from `./gateway`) verifies the
+`X-Roger-Signature` header — `t=<epochSeconds>;v1=<hex>`, HMAC-SHA512 of
+`<t>.<rawBody>` keyed by `CORPAYONE_WEBHOOK_SECRET`. Pass the raw, unparsed
+body.
 
-Webhook events drive integrations: expense state transitions
-(`expense.state.pending|awaiting|booked|initialized|paid|paused|refunded|cancelled`)
-and field/action events (`expense.category.updated`, `expense.label.updated`,
-`expense.approval.approved`, `payment.updated`, …). Inbound webhook payloads are
-signed with `X-Roger-Signature`; validate them with `validateWebhookSignature`
-from `src/corpay/webhooks.ts` using your `CORPAYONE_WEBHOOK_SECRET`.
+## Notes on the API
 
-## Tools
+Built against the published OpenAPI documents at `api.corpayone.com/docs`
+(public-v1, v2 and v3). The endpoint allowlist is generated from them, so an
+unlisted path fails locally instead of reaching Corpay.
 
-- `corpay_check_connection`
-- `corpay_search_capabilities`
-- `corpay_list_expenses`
-- `corpay_prepare_expense_coding` → `corpay_commit_prepared_operation`
-- `corpay_call_endpoint` (allowlisted; read-only unless write policy permits)
+One endpoint is not in those documents: `PATCH /v2/expenses/{id}` with
+`application/json-patch+json`. It is the only way to set category, labels and
+departments in a single atomic request, so it is used for coding and marked
+`provisional` in the catalog. Its writable paths are `/categoryId` (scalar) and
+`/labels` and `/departments` (plain id arrays); the JSON Patch op must be `add`
+when the field is empty and `replace` when it is not, which is why the expense
+is read before the patch is built.
 
-## Write Policy
+## Licence
 
-Writes are blocked unless explicitly enabled:
-
-```sh
-export CORPAYONE_ENABLE_WRITES=true
-export CORPAYONE_POLICY_PATH="/absolute/path/to/corpayone-policy.json"
-export CORPAYONE_AUDIT_LOG="/absolute/path/to/corpayone-audit.jsonl"
-```
-
-Money-movement surfaces (payments, approvals, webhooks) are denied by default and
-must be re-allowed explicitly in a policy file.
-
-## Borgels Gateway Contract
-
-`mcp-server-corpayone/gateway` exports `corpayGatewayTools` and
-`createCorpayGateway(options)` so the Borgels control plane (mcp.borgels.com) can
-wrap Corpay One as a provider without copying connector logic, exactly like the
-e-conomic gateway. Reads (`check_connection`, `list_expenses`, `get_expense`,
-`list_categories`, `list_coding_options`) are enabled by default;
-`write_expense_coding` is a write,
-disabled by default. It sets a bill's coding
-(`categoryId`/`labelIds`/`departmentIds`) via an RFC 6902 JSON Patch — it does
-not approve the bill. A control plane that applies its own write governance
-enables the write by passing `enableWrites: true` to `createCorpayGateway`
-(equivalent to the standalone `CORPAYONE_ENABLE_WRITES` env flag).
-`contractMode: true` returns deterministic fixtures with no network calls.
-
-## Verification
-
-```sh
-npm run typecheck
-npm test
-npm run build
-```
-
-## License
-
-Apache-2.0. See [LICENSE](LICENSE).
+Apache-2.0.
