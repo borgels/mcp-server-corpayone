@@ -31,6 +31,15 @@ First release usable as a hosted, multi-company deployment.
   operation rather than the caller's copy.
 - Curated tool surface expanded to 27 tools, covering expenses, coding options,
   vendors, cards, members and webhooks.
+- **Tools are gated on what the grant can actually reach.** Rather than
+  offering five tools that always 403, the server hides them unless the scope
+  is held; `CORPAYONE_SCOPE` turns them back on if Corpay grants more. The map
+  of which endpoint needs which scope is *measured* against the live API, not
+  inferred: `teams.all` covers `/teams/{id}/modules` but not `/departments` or
+  `/members`, and `expenses.all` covers `/expenses/{id}/approvers` — so
+  approvers and modules work on a standard grant after all. Departments and
+  items are dropped from the coding tools when unreachable, since their ids
+  would be unknowable. `/usage/export/summary` is removed outright: it 500s.
 - `npm run auth:grant` requests the seven scopes a Corpay app can actually
   obtain. Establishing that ceiling took probing the live authorize endpoint:
   asking for a scope the client is not allowed fails the whole authorize call

@@ -1,4 +1,5 @@
 import type { HttpMethod } from './client.js';
+import { explainMissingScope, hasScope } from './scopes.js';
 
 /**
  * How consequential an operation is.
@@ -18,6 +19,12 @@ export interface EndpointOperation {
   risk: CapabilityRisk;
   /** Absent from the public OpenAPI documents; verified against the live API. */
   provisional?: boolean;
+  /**
+   * Scope this endpoint needs beyond a standard grant. Measured live, not
+   * inferred — see scopes.ts. Endpoints naming one the grant lacks are not
+   * offered at all, rather than failing when called.
+   */
+  requiresScope?: string;
 }
 
 export interface Capability {
@@ -27,6 +34,8 @@ export interface Capability {
   description: string;
   risk: CapabilityRisk;
   keywords: string[];
+  /** Scope needed beyond a standard grant; the tool is hidden without it. */
+  requiresScope?: string;
 }
 
 /**
@@ -41,9 +50,9 @@ export interface Capability {
  * scope is recorded per endpoint here; see the README for the grant to request.
  */
 export const ENDPOINT_OPERATIONS: EndpointOperation[] = [
-  op('GET', '/v1/payments/methods', 'Get/list cards (payment methods).', 'read'),
-  op('GET', '/v1/payments/methods/bank/accounts/{accountId}', 'View/read a bank account info (payment method).', 'read'),
-  op('GET', '/v1/payments/methods/cards/{cardId}', 'View/read a card (payment method).', 'read'),
+  op('GET', '/v1/payments/methods', 'Get/list cards (payment methods).', 'read', undefined, 'payments.all'),
+  op('GET', '/v1/payments/methods/bank/accounts/{accountId}', 'View/read a bank account info (payment method).', 'read', undefined, 'payments.all'),
+  op('GET', '/v1/payments/methods/cards/{cardId}', 'View/read a card (payment method).', 'read', undefined, 'payments.all'),
   op('GET', '/v1/teams', 'Get/list teams of the authenticated user.', 'read'),
   op('POST', '/v1/teams', 'Add/create teams.', 'dangerous'),
   op('DELETE', '/v1/teams/{teamId}', 'Delete a team (where authenticated user must be a member).', 'dangerous'),
@@ -56,11 +65,11 @@ export const ENDPOINT_OPERATIONS: EndpointOperation[] = [
   op('DELETE', '/v1/teams/{teamId}/categories/{categoryId}', 'Delete a team category.', 'dangerous'),
   op('GET', '/v1/teams/{teamId}/categories/{categoryId}', 'Get a team category.', 'read'),
   op('PUT', '/v1/teams/{teamId}/categories/{categoryId}', 'Update a single team category.', 'commit'),
-  op('GET', '/v1/teams/{teamId}/departments', 'List departments on the team.', 'read'),
-  op('POST', '/v1/teams/{teamId}/departments', 'Create team department.', 'commit'),
-  op('PUT', '/v1/teams/{teamId}/departments', 'Merge departments into the team.', 'commit'),
-  op('DELETE', '/v1/teams/{teamId}/departments/{departmentId}', 'Delete team department.', 'dangerous'),
-  op('GET', '/v1/teams/{teamId}/departments/{departmentId}', 'Get team department.', 'read'),
+  op('GET', '/v1/teams/{teamId}/departments', 'List departments on the team.', 'read', undefined, 'departments.all'),
+  op('POST', '/v1/teams/{teamId}/departments', 'Create team department.', 'commit', undefined, 'departments.all'),
+  op('PUT', '/v1/teams/{teamId}/departments', 'Merge departments into the team.', 'commit', undefined, 'departments.all'),
+  op('DELETE', '/v1/teams/{teamId}/departments/{departmentId}', 'Delete team department.', 'dangerous', undefined, 'departments.all'),
+  op('GET', '/v1/teams/{teamId}/departments/{departmentId}', 'Get team department.', 'read', undefined, 'departments.all'),
   op('GET', '/v1/teams/{teamId}/lists', 'List team lists.', 'read'),
   op('POST', '/v1/teams/{teamId}/lists', 'Create team list.', 'commit'),
   op('DELETE', '/v1/teams/{teamId}/lists/{listId}', 'Delete team list.', 'dangerous'),
@@ -72,27 +81,26 @@ export const ENDPOINT_OPERATIONS: EndpointOperation[] = [
   op('POST', '/v1/teams/{teamId}/lists/{listId}/labels/async', 'Import team list labels in background.', 'commit'),
   op('PUT', '/v1/teams/{teamId}/lists/{listId}/labels/async', 'Merge team list labels in background.', 'commit'),
   op('GET', '/v1/teams/{teamId}/lists/{listId}/labels/{labelId}', 'Get a team list label.', 'read'),
-  op('GET', '/v1/teams/{teamId}/members', 'List members of the team.', 'read'),
-  op('POST', '/v1/teams/{teamId}/members', 'Create a team member.', 'dangerous'),
-  op('DELETE', '/v1/teams/{teamId}/members/{userId}', 'Delete a team member.', 'dangerous'),
-  op('PATCH', '/v1/teams/{teamId}/members/{userId}', 'Update a team member.', 'dangerous'),
+  op('GET', '/v1/teams/{teamId}/members', 'List members of the team.', 'read', undefined, 'teams.members.list'),
+  op('POST', '/v1/teams/{teamId}/members', 'Create a team member.', 'dangerous', undefined, 'teams.members.all'),
+  op('DELETE', '/v1/teams/{teamId}/members/{userId}', 'Delete a team member.', 'dangerous', undefined, 'teams.members.all'),
+  op('PATCH', '/v1/teams/{teamId}/members/{userId}', 'Update a team member.', 'dangerous', undefined, 'teams.members.all'),
   op('GET', '/v1/teams/{teamId}/modules', 'List modules activated on the team.', 'read'),
-  op('GET', '/v1/teams/{teamId}/usage/export/summary', 'Export a usage summary for the team.', 'read'),
-  op('GET', '/v1/users/me', 'View/read the current authenticated user.', 'read'),
+  op('GET', '/v1/users/me', 'View/read the current authenticated user.', 'read', undefined, 'users.read'),
   op('GET', '/v1/webhooks', 'Get/list webhooks created by the authenticated user (only by this API client/consumer).', 'read'),
   op('POST', '/v1/webhooks', 'Add/create webhooks.', 'commit'),
   op('PUT', '/v1/webhooks', 'Update existing webhooks.', 'commit'),
   op('DELETE', '/v1/webhooks/{webhookId}', 'Remove/delete webhooks.', 'dangerous'),
   op('GET', '/v1/webhooks/{webhookId}', 'Get/read a specific webhook created by the authenticated user (only by this API client/consumer).', 'read'),
   op('POST', '/v1/webhooks/{webhookId}/expenses/{expenseId}/logs', 'Create a webhook sync log entry for an expense.', 'commit'),
-  op('GET', '/v2/creditaccounts/team/{teamId}', 'Get all the credit account ids related to this team.', 'read'),
-  op('GET', '/v2/creditaccounts/team/{teamId}/card/{id}', 'Get credit account card information.', 'read'),
-  op('GET', '/v2/creditaccounts/{creditAccountId}/team/{teamId}/balance', 'Get the total balance for a credit account.', 'read'),
-  op('GET', '/v2/creditaccounts/{creditAccountId}/team/{teamId}/payment/{creditAccountPaymentId}', 'Get a specific payment related to a specific credit account.', 'read'),
-  op('GET', '/v2/creditaccounts/{creditAccountId}/team/{teamId}/payments', 'Get the payments related to a specific credit account.', 'read'),
-  op('GET', '/v2/creditaccounts/{creditAccountId}/team/{teamId}/transaction/{creditAccountTransactionId}', 'Get a specific transaction related to a specific credit account.', 'read'),
-  op('PATCH', '/v2/creditaccounts/{creditAccountId}/team/{teamId}/transaction/{creditAccountTransactionId}', 'Update the bookkeeping details of a credit account transaction.', 'commit'),
-  op('GET', '/v2/creditaccounts/{creditAccountId}/team/{teamId}/transactions', 'Get the transactions related to a specific credit account.', 'read'),
+  op('GET', '/v2/creditaccounts/team/{teamId}', 'Get all the credit account ids related to this team.', 'read', undefined, 'cardtransactions.all'),
+  op('GET', '/v2/creditaccounts/team/{teamId}/card/{id}', 'Get credit account card information.', 'read', undefined, 'cardtransactions.all'),
+  op('GET', '/v2/creditaccounts/{creditAccountId}/team/{teamId}/balance', 'Get the total balance for a credit account.', 'read', undefined, 'cardtransactions.all'),
+  op('GET', '/v2/creditaccounts/{creditAccountId}/team/{teamId}/payment/{creditAccountPaymentId}', 'Get a specific payment related to a specific credit account.', 'read', undefined, 'cardtransactions.all'),
+  op('GET', '/v2/creditaccounts/{creditAccountId}/team/{teamId}/payments', 'Get the payments related to a specific credit account.', 'read', undefined, 'cardtransactions.all'),
+  op('GET', '/v2/creditaccounts/{creditAccountId}/team/{teamId}/transaction/{creditAccountTransactionId}', 'Get a specific transaction related to a specific credit account.', 'read', undefined, 'cardtransactions.all'),
+  op('PATCH', '/v2/creditaccounts/{creditAccountId}/team/{teamId}/transaction/{creditAccountTransactionId}', 'Update the bookkeeping details of a credit account transaction.', 'commit', undefined, 'cardtransactions.all'),
+  op('GET', '/v2/creditaccounts/{creditAccountId}/team/{teamId}/transactions', 'Get the transactions related to a specific credit account.', 'read', undefined, 'cardtransactions.all'),
   op('GET', '/v2/expenses', 'Get/list expenses.', 'read'),
   op('POST', '/v2/expenses', 'Upload an expense.', 'commit'),
   op('POST', '/v2/expenses/generate', 'Generate an expense.', 'commit'),
@@ -107,18 +115,18 @@ export const ENDPOINT_OPERATIONS: EndpointOperation[] = [
   op('PATCH', '/v2/expenses/{expenseId}/decline', 'Decline an expense waiting for approval.', 'approval'),
   op('POST', '/v2/expenses/{expenseId}/labels', 'Set a label on an expense.', 'commit'),
   op('GET', '/v2/expenses/{expenseId}/links', 'Fetch all the links existing on an expense.', 'read'),
-  op('GET', '/v2/teams/{teamId}/items', 'List the items on the team.', 'read'),
-  op('POST', '/v2/teams/{teamId}/items', 'Overwrite the team item list.', 'commit'),
-  op('PUT', '/v2/teams/{teamId}/items', 'Add new items to the team item list.', 'commit'),
-  op('GET', '/v2/teams/{teamId}/items/disable', 'Disable the items feature for the team.', 'commit'),
-  op('GET', '/v2/teams/{teamId}/items/enable', 'Enable the items feature for the team.', 'commit'),
+  op('GET', '/v2/teams/{teamId}/items', 'List the items on the team.', 'read', undefined, 'items.read'),
+  op('POST', '/v2/teams/{teamId}/items', 'Overwrite the team item list.', 'commit', undefined, 'items.write'),
+  op('PUT', '/v2/teams/{teamId}/items', 'Add new items to the team item list.', 'commit', undefined, 'items.write'),
+  op('GET', '/v2/teams/{teamId}/items/disable', 'Disable the items feature for the team.', 'commit', undefined, 'items.read'),
+  op('GET', '/v2/teams/{teamId}/items/enable', 'Enable the items feature for the team.', 'commit', undefined, 'items.read'),
   op('GET', '/v2/teams/{teamId}/vendors', 'List vendors.', 'read'),
   op('POST', '/v2/teams/{teamId}/vendors', 'Create a vendor.', 'commit'),
   op('GET', '/v2/teams/{teamId}/vendors/{vendorId}', 'View/read a vendor.', 'read'),
   op('PATCH', '/v2/teams/{teamId}/vendors/{vendorId}/external-id', 'Set a vendor external id (ERP link).', 'commit'),
   op('PATCH', '/v2/teams/{teamId}/vendors/{vendorId}/initialize-external-identification', 'Initialize external identification for a vendor.', 'commit'),
-  op('GET', '/v3/creditaccounts/team/{teamId}/payment/{creditAccountPaymentId}', 'Get a specific payment related to a specific credit account.', 'read'),
-  op('GET', '/v3/creditaccounts/team/{teamId}/transaction/{creditAccountTransactionId}', 'Get a credit account transaction.', 'read'),
+  op('GET', '/v3/creditaccounts/team/{teamId}/payment/{creditAccountPaymentId}', 'Get a specific payment related to a specific credit account.', 'read', undefined, 'cardtransactions.all'),
+  op('GET', '/v3/creditaccounts/team/{teamId}/transaction/{creditAccountTransactionId}', 'Get a credit account transaction.', 'read', undefined, 'cardtransactions.all'),
   op('GET', '/v3/expenses/{expenseId}', 'View/read an expense.', 'read'),
   // Not in the public spec, but the only way to set several coding fields
   // atomically; confirmed working and kept for that reason.
@@ -176,15 +184,15 @@ export const CURATED_CAPABILITIES: Capability[] = [
   tool('corpay_list_coding_options', 'List coding options', 'Categories, label lists, departments and items in one read — the vocabulary for coding an expense.', 'read', ['coding', 'category', 'account', 'label', 'department', 'dimension', 'item']),
   tool('corpay_list_vendors', 'List vendors', 'List vendors (creditors) on the team.', 'read', ['vendor', 'supplier', 'creditor']),
   tool('corpay_get_vendor', 'Get vendor', 'Read one vendor.', 'read', ['vendor', 'supplier']),
-  tool('corpay_list_credit_accounts', 'List credit accounts', 'Credit and card accounts belonging to the team.', 'read', ['card', 'credit', 'account']),
-  tool('corpay_list_card_transactions', 'List card transactions', 'Transactions on a credit account, with their bookkeeping state.', 'read', ['card', 'transaction', 'credit']),
-  tool('corpay_list_payment_methods', 'List payment methods', 'Cards and bank accounts registered as payment methods.', 'read', ['payment', 'card', 'bank']),
-  tool('corpay_list_team_members', 'List team members', 'People on the team and their roles.', 'read', ['member', 'user', 'people']),
+  tool('corpay_list_credit_accounts', 'List credit accounts', 'Credit and card accounts belonging to the team.', 'read', ['card', 'credit', 'account'], 'cardtransactions.all'),
+  tool('corpay_list_card_transactions', 'List card transactions', 'Transactions on a credit account, with their bookkeeping state.', 'read', ['card', 'transaction', 'credit'], 'cardtransactions.all'),
+  tool('corpay_list_payment_methods', 'List payment methods', 'Cards and bank accounts registered as payment methods.', 'read', ['payment', 'card', 'bank'], 'payments.all'),
+  tool('corpay_list_team_members', 'List team members', 'People on the team and their roles.', 'read', ['member', 'user', 'people'], 'teams.members.list'),
   tool('corpay_list_webhooks', 'List webhooks', 'Webhook subscriptions visible to this grant.', 'read', ['webhook', 'integration']),
   tool('corpay_call_endpoint', 'Call allowlisted endpoint', 'Call any allowlisted endpoint directly. Reads run immediately; writes must go through prepare and commit.', 'read', ['advanced', 'escape hatch']),
   tool('corpay_prepare_expense_coding', 'Prepare expense coding', 'Dry-run the coding of an expense — category, labels, department, item.', 'draft', ['coding', 'category', 'label', 'write']),
   tool('corpay_prepare_expense_amount_lines', 'Prepare expense split', 'Dry-run splitting an expense into several coded amount lines.', 'draft', ['coding', 'split', 'lines', 'write']),
-  tool('corpay_prepare_card_transaction_coding', 'Prepare card transaction coding', 'Dry-run the bookkeeping details of a credit account transaction.', 'draft', ['card', 'coding', 'write']),
+  tool('corpay_prepare_card_transaction_coding', 'Prepare card transaction coding', 'Dry-run the bookkeeping details of a credit account transaction.', 'draft', ['card', 'coding', 'write'], 'cardtransactions.all'),
   tool('corpay_prepare_vendor_change', 'Prepare vendor change', 'Dry-run creating a vendor or setting its external id.', 'draft', ['vendor', 'write']),
   tool('corpay_prepare_coding_list_change', 'Prepare coding list change', 'Dry-run a change to categories, departments, label lists or items.', 'draft', ['category', 'department', 'label', 'item', 'write']),
   tool('corpay_prepare_webhook_change', 'Prepare webhook change', 'Dry-run creating, updating or deleting a webhook subscription.', 'draft', ['webhook', 'write']),
@@ -193,9 +201,27 @@ export const CURATED_CAPABILITIES: Capability[] = [
   tool('corpay_commit_expense_approval', 'Commit expense approval', 'Approve or decline an expense. Gated separately from ordinary writes.', 'approval', ['approval', 'approve', 'decline', 'payment']),
 ];
 
+/** Endpoints this grant can actually reach. */
+export function availableEndpoints(): EndpointOperation[] {
+  return ENDPOINT_OPERATIONS.filter(op => hasScope(op.requiresScope));
+}
+
+/** Whether an endpoint is reachable, by path fragment — used to gate tools. */
+export function endpointAvailable(method: HttpMethod, pathTemplate: string): boolean {
+  const match = ENDPOINT_OPERATIONS.find(
+    op => op.method === method && op.pathTemplate === pathTemplate,
+  );
+  return match ? hasScope(match.requiresScope) : false;
+}
+
+/** Curated tools this grant can actually use. */
+export function availableCapabilities(): Capability[] {
+  return CURATED_CAPABILITIES.filter(c => hasScope(c.requiresScope));
+}
+
 export function searchCapabilities(query: string, limit = 20): Capability[] {
   const q = query.trim().toLowerCase();
-  const all = [...CURATED_CAPABILITIES, ...endpointCapabilities()];
+  const all = [...availableCapabilities(), ...endpointCapabilities()];
   if (!q) return all.slice(0, limit);
   return all
     .filter(
@@ -209,7 +235,7 @@ export function searchCapabilities(query: string, limit = 20): Capability[] {
 }
 
 export function getCapability(id: string): Capability | undefined {
-  return [...CURATED_CAPABILITIES, ...endpointCapabilities()].find(c => c.id === id);
+  return [...availableCapabilities(), ...endpointCapabilities()].find(c => c.id === id);
 }
 
 export function findEndpoint(method: HttpMethod, pathTemplate: string): EndpointOperation {
@@ -219,6 +245,11 @@ export function findEndpoint(method: HttpMethod, pathTemplate: string): Endpoint
   if (!match) {
     throw new Error(
       `Endpoint is not allowlisted: ${method} ${pathTemplate}. Use corpay_search_capabilities to find one that is.`,
+    );
+  }
+  if (!hasScope(match.requiresScope)) {
+    throw new Error(
+      `${method} ${pathTemplate} is not available. ${explainMissingScope(match.requiresScope as string)}`,
     );
   }
   return match;
@@ -238,7 +269,7 @@ export function materializePath(
 }
 
 function endpointCapabilities(): Capability[] {
-  return ENDPOINT_OPERATIONS.map(op => ({
+  return availableEndpoints().map(op => ({
     id: `endpoint.${op.id}`,
     title: `${op.method} ${op.pathTemplate}`,
     kind: 'endpoint' as const,
@@ -254,8 +285,17 @@ function op(
   summary: string,
   risk: CapabilityRisk,
   provisional?: boolean,
+  requiresScope?: string,
 ): EndpointOperation {
-  return { id: `${method} ${pathTemplate}`, method, pathTemplate, summary, risk, provisional };
+  return {
+    id: `${method} ${pathTemplate}`,
+    method,
+    pathTemplate,
+    summary,
+    risk,
+    provisional,
+    requiresScope,
+  };
 }
 
 function tool(
@@ -264,6 +304,7 @@ function tool(
   description: string,
   risk: CapabilityRisk,
   keywords: string[],
+  requiresScope?: string,
 ): Capability {
-  return { id, title, kind: 'tool', description, risk, keywords };
+  return { id, title, kind: 'tool', description, risk, keywords, requiresScope };
 }
