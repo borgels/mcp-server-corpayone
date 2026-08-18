@@ -41,28 +41,37 @@ const redirectUri = process.env.CORPAYONE_REDIRECT_URI ?? 'http://localhost:5368
 /**
  * Scopes requested by the grant.
  *
- * Corpay declares scopes only globally in its OpenAPI documents, so this list
- * was assembled from the resources the server reads and writes, and verified by
- * running test/live-smoke.ts: a grant missing `departments.all` or the card
- * scopes returns 403 on those reads while everything else works, which is easy
- * to mistake for a broken endpoint.
+ * Corpay gates scopes on the *app registration*, not just on the grant: asking
+ * for one the app is not registered for makes the authorize call fail outright
+ * with an error page, rather than granting a narrower token. So this is the set
+ * a default Corpay app is registered for, verified against the live authorize
+ * endpoint.
  *
- * Override with CORPAYONE_SCOPE to request less.
+ * These are registered and work:
+ *   expenses.all  teams.all  teams.categories.all  teams.lists.all
+ *   teams.vendors.all  webhooks.all  offline_access
+ *
+ * These are rejected at authorize time and could NOT be obtained self-service.
+ * The developer portal at app.corpayone.com/developers will happily accept them
+ * into the app's scope list, but identity.corpayone.com keeps a separate client
+ * allowlist and still refuses them, so enabling them needs Corpay support.
+ * Once enabled, request them via CORPAYONE_SCOPE:
+ *   departments.all          -> departments in corpay_list_coding_options
+ *   items.read items.write   -> items in corpay_list_coding_options
+ *   cardtransactions.all     -> corpay_list_credit_accounts / card transactions
+ *   payments.all             -> corpay_list_payment_methods
+ *   teams.members.list       -> corpay_list_team_members
+ *   teams.modules.list       -> modules in corpay_get_company_context
+ *   expenses.approvers.read  -> corpay_get_expense_approvers
+ *
+ * Without them those specific reads return 403 while everything else works.
  */
 const DEFAULT_SCOPE = [
   'expenses.all',
-  'expenses.approvers.read',
   'teams.all',
   'teams.categories.all',
   'teams.lists.all',
   'teams.vendors.all',
-  'teams.members.list',
-  'teams.modules.list',
-  'departments.all',
-  'items.read',
-  'items.write',
-  'payments.all',
-  'cardtransactions.all',
   'webhooks.all',
   'offline_access',
 ].join(' ');

@@ -31,8 +31,15 @@ First release usable as a hosted, multi-company deployment.
   operation rather than the caller's copy.
 - Curated tool surface expanded to 27 tools, covering expenses, coding options,
   vendors, cards, members and webhooks.
-- `npm run auth:grant` now requests the full scope set the server needs; a grant
-  missing `departments.all` or the card scopes returns 403 on those reads only.
+- `npm run auth:grant` requests the seven scopes a Corpay app can actually
+  obtain. Establishing that ceiling took probing the live authorize endpoint:
+  asking for a scope the client is not allowed fails the whole authorize call
+  rather than issuing a narrower token, and adding the scope in the developer
+  portal does not help either — identity.corpayone.com keeps its own client
+  allowlist and still refuses it, so `departments.all`, `cardtransactions.all`,
+  `payments.all`, `items.*`, `teams.members.list`, `teams.modules.list` and
+  `expenses.approvers.read` need Corpay support to enable. The reads they gate
+  now return an error naming the missing scope instead of a bare 403.
 - Added `npm run smoke:live`, a read-only live check that also asserts a
   cross-team read is refused.
 - MCP `instructions` tell the client about minor-unit amounts, id-based coding,
