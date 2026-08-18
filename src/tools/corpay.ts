@@ -5,11 +5,13 @@ import {
   EXPENSE_STATES,
   EXPENSE_TYPES,
   WEBHOOK_EVENTS,
+  endpointAvailable,
   findEndpoint,
   getCapability,
   materializePath,
   searchCapabilities,
 } from '../corpay/catalog.js';
+import { hasScope } from '../corpay/scopes.js';
 import { prepareOperation, verifyPreparedOperation, type PreparedOperation } from '../corpay/operations.js';
 import { checkPolicy, isApprovalCapability, loadPolicy } from '../corpay/policy.js';
 import { prepareExpenseCoding } from '../corpay/coding.js';
@@ -270,7 +272,7 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
     {
       title: 'List Corpay One Coding Options',
       description:
-        'Every value an expense can be coded to — categories (GL accounts), label lists with their labels, departments and items — in one read. Coding writes take the Corpay internal ids returned here, not GL account or dimension numbers. Sources that are disabled on the team report an error instead of failing the whole call.',
+        'Every value an expense can be coded to — categories (GL accounts) and label lists with their labels — in one read. Departments and items are included only when the grant holds the scopes they need. Coding writes take the Corpay internal ids returned here, not GL account or dimension numbers.',
       inputSchema: {
         includeLabels: z.boolean().default(true).describe('Expand each label list into its labels.'),
         teamId: teamIdArg(),
@@ -285,12 +287,7 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
           error: formatUnknownError(error),
         }));
 
-      const [categories, lists, departments, items] = await Promise.all([
-        get(`${base}/categories`),
-        get(`${base}/lists`),
-        get(`${base}/departments`),
-        get(`/v2/teams/${encodeURIComponent(teamId)}/items`),
-      ]);
+      const [categories, lists] = await Promise.all([get(`${base}/categories`), get(`${base}/lists`)]);
 
       let labelLists = lists;
       if (input.includeLabels) {
@@ -308,7 +305,16 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
         };
       }
 
-      return jsonToolResult({ teamId, categories, lists: labelLists, departments, items });
+      // Departments and items are separate coding dimensions, but each needs a
+      // scope beyond a standard grant, so they are fetched only when reachable
+      // rather than returning an error under every key.
+      const extra: Record<string, unknown> = {};
+      if (hasScope('departments.all')) extra.departments = await get(`${base}/departments`);
+      if (hasScope('items.read')) {
+        extra.items = await get(`/v2/teams/${encodeURIComponent(teamId)}/items`);
+      }
+
+      return jsonToolResult({ teamId, categories, lists: labelLists, ...extra });
     },
   );
 
@@ -357,77 +363,85 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
 
   // ------------------------------------------------------- cards and payments
 
-  server.registerTool(
-    'corpay_list_credit_accounts',
-    {
-      title: 'List Corpay One Credit Accounts',
-      description: 'Credit and card accounts belonging to the team.',
-      inputSchema: { teamId: teamIdArg() },
-      annotations: READ_ONLY,
-    },
-    async input =>
-      jsonToolResult(
-        await client.request({
-          method: 'GET',
-          path: `/v2/creditaccounts/team/${encodeURIComponent(resolveTeamId(input.teamId))}`,
-          withTeamId: false,
-        }),
-      ),
-  );
-
-  server.registerTool(
-    'corpay_list_card_transactions',
-    {
-      title: 'List Corpay One Card Transactions',
-      description:
-        'Transactions on a credit account, with their bookkeeping state. Find the account id with corpay_list_credit_accounts.',
-      inputSchema: {
-        creditAccountId: z.string().trim().min(1),
-        offset: z.number().int().min(0).optional(),
-        count: z.number().int().min(1).max(100).optional(),
-        teamId: teamIdArg(),
+  if (hasScope('cardtransactions.all')) {
+    server.registerTool(
+      'corpay_list_credit_accounts',
+      {
+        title: 'List Corpay One Credit Accounts',
+        description: 'Credit and card accounts belonging to the team.',
+        inputSchema: { teamId: teamIdArg() },
+        annotations: READ_ONLY,
       },
-      annotations: READ_ONLY,
-    },
-    async input =>
-      jsonToolResult(
-        await client.request({
-          method: 'GET',
-          path: `/v2/creditaccounts/${encodeURIComponent(input.creditAccountId)}/team/${encodeURIComponent(resolveTeamId(input.teamId))}/transactions`,
-          query: { Offset: input.offset, Count: input.count },
-          withTeamId: false,
-        }),
-      ),
-  );
+      async input =>
+        jsonToolResult(
+          await client.request({
+            method: 'GET',
+            path: `/v2/creditaccounts/team/${encodeURIComponent(resolveTeamId(input.teamId))}`,
+            withTeamId: false,
+          }),
+        ),
+    );
+  }
 
-  server.registerTool(
-    'corpay_list_payment_methods',
-    {
-      title: 'List Corpay One Payment Methods',
-      description: 'Cards and bank accounts registered as payment methods.',
-      inputSchema: {},
-      annotations: READ_ONLY,
-    },
-    async () => jsonToolResult(await client.request({ method: 'GET', path: '/v1/payments/methods' })),
-  );
+  if (hasScope('cardtransactions.all')) {
+    server.registerTool(
+      'corpay_list_card_transactions',
+      {
+        title: 'List Corpay One Card Transactions',
+        description:
+          'Transactions on a credit account, with their bookkeeping state. Find the account id with corpay_list_credit_accounts.',
+        inputSchema: {
+          creditAccountId: z.string().trim().min(1),
+          offset: z.number().int().min(0).optional(),
+          count: z.number().int().min(1).max(100).optional(),
+          teamId: teamIdArg(),
+        },
+        annotations: READ_ONLY,
+      },
+      async input =>
+        jsonToolResult(
+          await client.request({
+            method: 'GET',
+            path: `/v2/creditaccounts/${encodeURIComponent(input.creditAccountId)}/team/${encodeURIComponent(resolveTeamId(input.teamId))}/transactions`,
+            query: { Offset: input.offset, Count: input.count },
+            withTeamId: false,
+          }),
+        ),
+    );
+  }
 
-  server.registerTool(
-    'corpay_list_team_members',
-    {
-      title: 'List Corpay One Team Members',
-      description: 'People on the team and their roles.',
-      inputSchema: { teamId: teamIdArg() },
-      annotations: READ_ONLY,
-    },
-    async input =>
-      jsonToolResult(
-        await client.request({
-          method: 'GET',
-          path: `/v1/teams/${encodeURIComponent(resolveTeamId(input.teamId))}/members`,
-          withTeamId: false,
-        }),
-      ),
-  );
+  if (hasScope('payments.all')) {
+    server.registerTool(
+      'corpay_list_payment_methods',
+      {
+        title: 'List Corpay One Payment Methods',
+        description: 'Cards and bank accounts registered as payment methods.',
+        inputSchema: {},
+        annotations: READ_ONLY,
+      },
+      async () => jsonToolResult(await client.request({ method: 'GET', path: '/v1/payments/methods' })),
+    );
+  }
+
+  if (hasScope('teams.members.list')) {
+    server.registerTool(
+      'corpay_list_team_members',
+      {
+        title: 'List Corpay One Team Members',
+        description: 'People on the team and their roles.',
+        inputSchema: { teamId: teamIdArg() },
+        annotations: READ_ONLY,
+      },
+      async input =>
+        jsonToolResult(
+          await client.request({
+            method: 'GET',
+            path: `/v1/teams/${encodeURIComponent(resolveTeamId(input.teamId))}/members`,
+            withTeamId: false,
+          }),
+        ),
+    );
+  }
 
   server.registerTool(
     'corpay_list_webhooks',
@@ -493,7 +507,16 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
         expenseId: z.string().trim().min(1),
         categoryId: z.string().trim().min(1).optional().describe('Corpay category id, not the GL account number.'),
         labelIds: z.array(z.string().trim().min(1)).optional().describe('Replaces the whole label set.'),
-        departmentIds: z.array(z.string().trim().min(1)).optional().describe('Replaces the whole department set.'),
+        // Departments are only offered when the grant can read them; without
+        // that, their ids are unknowable and the argument would be a trap.
+        ...(hasScope('departments.all')
+          ? {
+              departmentIds: z
+                .array(z.string().trim().min(1))
+                .optional()
+                .describe('Replaces the whole department set.'),
+            }
+          : {}),
         reason: reasonSchema,
       },
       annotations: DRY_RUN,
@@ -515,10 +538,11 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
               amount: z.number().describe('Minor units (øre for DKK).'),
               note: z.string().optional(),
               category: z.string().optional().describe('Corpay category id.'),
-              department: z.string().optional(),
               labels: z.array(z.string()).optional(),
-              itemId: z.string().optional(),
-              itemQuantity: z.number().optional(),
+              ...(hasScope('departments.all') ? { department: z.string().optional() } : {}),
+              ...(hasScope('items.read')
+                ? { itemId: z.string().optional(), itemQuantity: z.number().optional() }
+                : {}),
             }),
           )
           .min(1),
@@ -539,43 +563,45 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
       ),
   );
 
-  server.registerTool(
-    'corpay_prepare_card_transaction_coding',
-    {
-      title: 'Prepare Corpay One Card Transaction Coding',
-      description:
-        'Dry-run the bookkeeping details of a credit account transaction: category, department, labels, item, vendor and note.',
-      inputSchema: {
-        creditAccountId: z.string().trim().min(1),
-        creditAccountTransactionId: z.string().trim().min(1),
-        categoryId: z.string().optional(),
-        departmentId: z.string().optional(),
-        labels: z.array(z.string()).optional(),
-        itemId: z.string().optional(),
-        itemQuantity: z.number().optional(),
-        vendorId: z.string().optional(),
-        note: z.string().optional(),
-        teamId: teamIdArg(),
-        reason: reasonSchema,
+  if (hasScope('cardtransactions.all')) {
+    server.registerTool(
+      'corpay_prepare_card_transaction_coding',
+      {
+        title: 'Prepare Corpay One Card Transaction Coding',
+        description:
+          'Dry-run the bookkeeping details of a credit account transaction: category, department, labels, item, vendor and note.',
+        inputSchema: {
+          creditAccountId: z.string().trim().min(1),
+          creditAccountTransactionId: z.string().trim().min(1),
+          categoryId: z.string().optional(),
+          departmentId: z.string().optional(),
+          labels: z.array(z.string()).optional(),
+          itemId: z.string().optional(),
+          itemQuantity: z.number().optional(),
+          vendorId: z.string().optional(),
+          note: z.string().optional(),
+          teamId: teamIdArg(),
+          reason: reasonSchema,
+        },
+        annotations: DRY_RUN,
       },
-      annotations: DRY_RUN,
-    },
-    async input => {
-      const teamId = resolveTeamId(input.teamId);
-      const { reason, teamId: _ignored, creditAccountId, creditAccountTransactionId, ...fields } = input;
-      return jsonToolResult(
-        prepareOperation({
-          capability: 'corpay_prepare_card_transaction_coding',
-          method: 'PATCH',
-          pathTemplate:
-            '/v2/creditaccounts/{creditAccountId}/team/{teamId}/transaction/{creditAccountTransactionId}',
-          pathParams: { creditAccountId, teamId, creditAccountTransactionId },
-          body: { creditAccountId, creditAccountTransactionId, teamId, ...definedOnly(fields) },
-          reason,
-        }),
-      );
-    },
-  );
+      async input => {
+        const teamId = resolveTeamId(input.teamId);
+        const { reason, teamId: _ignored, creditAccountId, creditAccountTransactionId, ...fields } = input;
+        return jsonToolResult(
+          prepareOperation({
+            capability: 'corpay_prepare_card_transaction_coding',
+            method: 'PATCH',
+            pathTemplate:
+              '/v2/creditaccounts/{creditAccountId}/team/{teamId}/transaction/{creditAccountTransactionId}',
+            pathParams: { creditAccountId, teamId, creditAccountTransactionId },
+            body: { creditAccountId, creditAccountTransactionId, teamId, ...definedOnly(fields) },
+            reason,
+          }),
+        );
+      },
+    );
+  }
 
   server.registerTool(
     'corpay_prepare_vendor_change',
