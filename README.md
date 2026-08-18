@@ -49,17 +49,42 @@ CORPAYONE_REFRESH_TOKEN=...
 CORPAYONE_ENV=production
 ```
 
-Create an app at `https://web.corpayone.com/developers`, then run the grant once
+Create an app at `https://app.corpayone.com/developers`, then run the grant once
 to capture a refresh token:
 
 ```bash
 npm run auth:grant
 ```
 
-It requests the scopes the server needs. A grant missing `departments.all` or
-the card scopes still works for most calls but returns 403 on those specific
-reads, which is easy to mistake for a broken endpoint — `npm run smoke:live`
-will show you exactly which ones.
+### The scope ceiling
+
+`auth:grant` requests the seven scopes a Corpay app can actually obtain:
+`expenses.all`, `teams.all`, `teams.categories.all`, `teams.lists.all`,
+`teams.vendors.all`, `webhooks.all`, `offline_access`.
+
+Several endpoints in the API need scopes **beyond** that, and they cannot be
+obtained self-service. Asking for one makes the authorize call fail outright
+rather than issuing a narrower token, and — verified against the live service —
+adding it to the app in the developer portal is *not* enough either:
+`identity.corpayone.com` keeps its own client allowlist and still refuses the
+scope. Enabling them requires Corpay support.
+
+Affected reads, which return 403 while everything else works:
+
+| Scope | What it unlocks |
+|---|---|
+| `departments.all` | departments in `corpay_list_coding_options` |
+| `items.read` / `items.write` | items in `corpay_list_coding_options` |
+| `cardtransactions.all` | `corpay_list_credit_accounts`, card transactions |
+| `payments.all` | `corpay_list_payment_methods` |
+| `teams.members.list` | `corpay_list_team_members` |
+| `teams.modules.list` | modules in `corpay_get_company_context` |
+| `expenses.approvers.read` | `corpay_get_expense_approvers` |
+
+A 403 on any of these is reported with the scope it needs, rather than as a raw
+error. `npm run smoke:live` shows which are affected on a given grant, and
+`corpay_list_coding_options` degrades per source instead of failing wholesale —
+so expense coding via categories and labels works regardless.
 
 ### Scoping the server to one company
 
