@@ -64,3 +64,24 @@ describe('redaction', () => {
     expect(redactUrl('not a url?with=query')).toBe('not a url');
   });
 });
+
+describe('scope explanation travels with the error', () => {
+  it('replaces the HTML dump in the error message itself', () => {
+    // The message matters on its own: a read tool lets the error propagate to
+    // the MCP client without passing through formatUnknownError.
+    const error = forbidden('/v2/creditaccounts/team/T1');
+    expect(error.message).toMatch(/cardtransactions\.all/);
+    expect(error.message).not.toMatch(/DOCTYPE/);
+  });
+
+  it('leaves an ordinary error message intact', () => {
+    const error = new CorpayHttpError({
+      status: 400,
+      method: 'GET',
+      url: 'https://api.corpayone.com/external/v2/expenses',
+      payload: { errors: { count: ['must be between 10 and 100'] } },
+    });
+    expect(error.message).toMatch(/HTTP 400/);
+    expect(error.message).toMatch(/between 10 and 100/);
+  });
+});

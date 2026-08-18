@@ -18,14 +18,21 @@ export class CorpayHttpError extends Error {
   readonly retryAfter?: string;
 
   constructor(init: CorpayHttpErrorInit) {
+    const url = redactUrl(init.url);
+    // A scope-gated 403 is explained here rather than at each call site, so the
+    // reason travels with the error even when it propagates straight to the
+    // MCP client. Corpay answers these with an HTML error page, which is worse
+    // than useless in a tool result.
+    const scopeHint = missingScopeFor(init.status, url);
     const summary =
       typeof init.payload === 'object' && init.payload !== null
         ? JSON.stringify(init.payload)
         : (init.fallbackMessage ?? '');
     super(
-      `Corpay One API request failed with HTTP ${init.status}` +
-        ` | ${init.method} ${redactUrl(init.url)}` +
-        (summary ? ` | ${summary}` : ''),
+      scopeHint ??
+        `Corpay One API request failed with HTTP ${init.status}` +
+          ` | ${init.method} ${url}` +
+          (summary ? ` | ${summary}` : ''),
     );
     this.name = 'CorpayHttpError';
     this.status = init.status;
@@ -62,11 +69,15 @@ const SCOPE_GATED: Array<{ pattern: RegExp; scope: string }> = [
 
 /** Explain a 403 that is really a missing scope, not a missing permission. */
 export function explainForbidden(error: CorpayHttpError): string | undefined {
-  if (error.status !== 403) return undefined;
-  const hit = SCOPE_GATED.find(entry => entry.pattern.test(error.url));
+  return missingScopeFor(error.status, error.url);
+}
+
+function missingScopeFor(status: number, url: string): string | undefined {
+  if (status !== 403) return undefined;
+  const hit = SCOPE_GATED.find(entry => entry.pattern.test(url));
   if (!hit) return undefined;
   return (
-    `Corpay returned 403 for ${error.url}. This endpoint needs the OAuth scope ` +
+    `Corpay returned 403 for ${url}. This endpoint needs the OAuth scope ` +
     `"${hit.scope}", which this app's token does not carry. Note that selecting ` +
     'the scope in the developer portal is not sufficient: identity.corpayone.com ' +
     'keeps its own client allowlist and still refuses the scope at authorize ' +
