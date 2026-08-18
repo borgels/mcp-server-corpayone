@@ -644,7 +644,7 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
     {
       title: 'Prepare Corpay One Coding List Change',
       description:
-        'Dry-run a change to the coding vocabulary — categories, departments, label lists, labels or items. Pass the allowlisted endpoint for the exact operation; find it with corpay_search_capabilities.',
+        `Dry-run a change to the coding vocabulary — ${codingDimensions()}. Pass the allowlisted endpoint for the exact operation; find it with corpay_search_capabilities.`,
       inputSchema: {
         method: z.enum(['POST', 'PUT', 'PATCH']),
         pathTemplate: z.string().trim().min(1).describe('e.g. /v1/teams/{teamId}/categories'),
@@ -903,6 +903,14 @@ function teamIdArg(): z.ZodOptional<z.ZodString> {
         ? 'Ignored: this server is scoped to a single team.'
         : 'Corpay team (company) id. List them with corpay_list_teams.',
     );
+}
+
+/** The coding dimensions this grant can actually maintain. */
+function codingDimensions(): string {
+  const parts = ['categories', 'label lists and labels'];
+  if (hasScope('departments.all')) parts.push('departments');
+  if (hasScope('items.write')) parts.push('items');
+  return parts.join(', ');
 }
 
 function extractListIds(lists: unknown): string[] {
