@@ -1,7 +1,7 @@
 {
   "name": "mcp-server-corpayone",
-  "version": "0.0.1",
-  "description": "Policy-aware MCP server for the Corpay One API.",
+  "version": "1.0.0",
+  "description": "Policy-aware MCP server for the Corpay One API (read-first, write-gated).",
   "type": "module",
   "main": "./dist/transports/stdio.js",
   "exports": {
@@ -22,13 +22,15 @@
     "mcp-server-corpayone": "./dist/transports/stdio.js"
   },
   "scripts": {
-    "build": "tsup src/transports/stdio.ts src/gateway.ts --format esm --dts --clean --sourcemap",
+    "build": "tsup src/transports/stdio.ts src/transports/http.ts src/gateway.ts --format esm --dts --clean --sourcemap",
     "dev": "tsx src/transports/stdio.ts",
     "auth:grant": "tsx src/auth/capture-token.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "prepare": "npm run build",
-    "prepack": "npm run typecheck && npm test && npm run build"
+    "prepack": "npm run typecheck && npm test && npm run build",
+    "dev:http": "tsx src/transports/http.ts",
+    "smoke:live": "tsx test/live-smoke.ts"
   },
   "repository": {
     "type": "git",
@@ -39,7 +41,9 @@
     "corpay",
     "corpay-one",
     "accounts-payable",
-    "bills"
+    "bills",
+    "expenses",
+    "ap-automation"
   ],
   "author": "",
   "license": "Apache-2.0",
@@ -60,5 +64,11 @@
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.6"
+  },
+  "overrides": {
+    "ip-address": ">=10.3.1",
+    "hono": ">=4.12.34",
+    "fast-uri": ">=3.1.5",
+    "@hono/node-server": ">=1.19.15"
   }
 }
