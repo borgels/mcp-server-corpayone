@@ -39,7 +39,11 @@ const preparedOperationSchema = z.object({
   dryRun: z.literal(true),
   reason: z.string().trim().min(1),
   operationHash: z.string().trim().min(32),
-  policyDecision: z.unknown(),
+  // Informational only — commit re-derives the decision from the verified
+  // operation. Optional because z.unknown() is *required* inside a Zod object,
+  // which would reject a caller that trimmed this field with a confusing
+  // "expected nonoptional" error.
+  policyDecision: z.unknown().optional(),
 });
 
 const READ_ONLY = {

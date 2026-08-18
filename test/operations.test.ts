@@ -173,3 +173,14 @@ describe('expense coding', () => {
     ).rejects.toThrow(/was not found/);
   });
 });
+
+describe('commit input shape', () => {
+  it('accepts a prepared operation whose informational fields were trimmed', () => {
+    // policyDecision is advisory; commit re-derives it. A client that drops it
+    // should not be met with a schema error.
+    const op = prepareCoding();
+    const { policyDecision, ...trimmed } = op;
+    expect(policyDecision).toBeDefined();
+    expect(() => verifyPreparedOperation(trimmed as typeof op)).not.toThrow();
+  });
+});
