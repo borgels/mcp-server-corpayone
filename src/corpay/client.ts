@@ -77,6 +77,14 @@ export class CorpayClient {
     this.timeoutMs = options.timeoutMs ?? Number(process.env.CORPAYONE_TIMEOUT_MS ?? 30_000);
   }
 
+  /**
+   * The team this client is pinned to (constructor option or
+   * CORPAYONE_TEAM_ID), or undefined when callers choose the team.
+   */
+  pinnedTeam(): string | undefined {
+    return this.teamId?.trim() || pinnedTeamId();
+  }
+
   /** Exchange the refresh token for a fresh access token (cached until expiry). */
   async getAccessToken(): Promise<string> {
     const now = Date.now();

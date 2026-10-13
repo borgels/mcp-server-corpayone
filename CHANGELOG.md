@@ -1,5 +1,24 @@
 # Changelog
 
+## Unreleased
+
+Security hardening.
+
+- On a server pinned with `CORPAYONE_TEAM_ID`, by-id expense and webhook
+  reads and writes now verify the resource belongs to the pinned team (at
+  prepare and again at commit), failing closed when it cannot be determined.
+- Prepared operations are signed with HMAC-SHA256 (`CORPAYONE_PREPARE_SECRET`,
+  random per process when unset), expire after 15 minutes, and are bound to
+  the endpoints of the capability that prepared them.
+  `corpay_prepare_coding_list_change` accepts only coding-list endpoints.
+- Path parameters are validated as single segments before encoding, and the
+  write policy matches deny patterns against the normalized path.
+- `npm run auth:grant` uses `state` and PKCE (S256) and listens on loopback only.
+- Webhook signature parsing no longer uses a backtracking regex.
+- The HTTP bearer token is compared in constant time; startup is refused when
+  forwarded-user trust is enabled without `MCP_HTTP_TOKEN`.
+- Dependency updates clearing all `npm audit` findings.
+
 ## 1.0.0
 
 First release usable as a hosted, multi-company deployment.
