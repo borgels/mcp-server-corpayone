@@ -1,5 +1,6 @@
 import type { CorpayClient } from './client.js';
 import { prepareOperation, type PreparedOperation } from './operations.js';
+import { fetchResourceInTeam } from './ownership.js';
 
 /**
  * Expense coding.
@@ -129,12 +130,9 @@ export async function prepareExpenseCoding(
 }
 
 async function readExpense(client: CorpayClient, expenseId: string): Promise<ExpenseReadModel> {
-  const response = await client.request<{ data?: ExpenseReadModel }>({
-    method: 'GET',
-    path: `/v3/expenses/${encodeURIComponent(expenseId)}`,
-    // The v3 read addresses the expense by id and needs no team parameter.
-    withTeamId: false,
-  });
+  // Addressed by id alone, so on a team-scoped server the expense's own team
+  // is checked against the pinned one before it is coded.
+  const response = await fetchResourceInTeam<{ data?: ExpenseReadModel }>(client, 'expense', expenseId);
   const data = response?.data;
   if (!data) {
     throw new Error(`Expense ${expenseId} was not found, or is not visible to this team.`);

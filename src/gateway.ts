@@ -1,5 +1,7 @@
 import { CorpayClient, type QueryValue } from './corpay/client.js';
 import { checkPolicy, loadPolicy } from './corpay/policy.js';
+import { encodePathSegment } from './corpay/catalog.js';
+import { fetchResourceInTeam } from './corpay/ownership.js';
 import { formatUnknownError } from './errors.js';
 
 // Re-exported so an embedding control plane can validate inbound Corpay One
@@ -194,14 +196,14 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
           case 'get_expense':
             return jsonResult(
               'Fetched Corpay One expense.',
-              await client.request({ method: 'GET', path: `/v3/expenses/${String(args.id)}` }),
+              await fetchResourceInTeam(client, 'expense', expenseIdArg(args)),
             );
           case 'list_categories': {
             // Categories (GL accounts) with their Corpay id/number/name — the
             // writable coding options. Requires the teams.categories scope.
             const data = await client.request<{ data?: { categories?: unknown } }>({
               method: 'GET',
-              path: `/v1/teams/${teamId}/categories`,
+              path: `/v1/teams/${encodePathSegment(teamId, 'teamId')}/categories`,
               withTeamId: false,
             });
             return jsonResult('Listed Corpay One categories.', { categories: data?.data?.categories ?? [] });
@@ -214,12 +216,12 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
             const [catData, listsData] = await Promise.all([
               client.request<{ data?: { categories?: CorpayCategory[] } }>({
                 method: 'GET',
-                path: `/v1/teams/${teamId}/categories`,
+                path: `/v1/teams/${encodePathSegment(teamId, 'teamId')}/categories`,
                 withTeamId: false,
               }),
               client.request<{ data?: { lists?: CorpayListSummary[] } }>({
                 method: 'GET',
-                path: `/v1/teams/${teamId}/lists`,
+                path: `/v1/teams/${encodePathSegment(teamId, 'teamId')}/lists`,
                 withTeamId: false,
               }),
             ]);
@@ -228,7 +230,7 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
               summaries.map(async (summary) => {
                 const detail = await client.request<{ data?: { list?: { labels?: CorpayLabel[] } } }>({
                   method: 'GET',
-                  path: `/v1/teams/${teamId}/lists/${summary.id}`,
+                  path: `/v1/teams/${encodePathSegment(teamId, 'teamId')}/lists/${encodePathSegment(summary.id, 'listId')}`,
                   withTeamId: false,
                 });
                 const labels = (detail?.data?.list?.labels ?? []).map((label) => ({
@@ -247,11 +249,13 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
           case 'write_expense_coding': {
             // Coding is written via RFC 6902 JSON Patch. categoryId is the Corpay
             // category id (from list_categories), not the GL number.
+            const expensePath = `/v2/expenses/${encodePathSegment(expenseIdArg(args), 'id')}`;
             const decision = checkPolicy(
               {
                 capability: 'corpay_write_expense_coding',
                 method: 'PATCH',
-                path: `/v2/expenses/${String(args.id)}`,
+                path: expensePath,
+                pathTemplate: '/v2/expenses/{expenseId}',
               },
               writePolicy,
             );
@@ -260,9 +264,10 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
             // Corpay 500s on `add` to an already-set scalar (e.g. its
             // auto-assigned category) and requires `replace`; an unset field
             // requires `add`.
-            const detail = await client.request<{
+            // Also verifies the expense belongs to the pinned team.
+            const detail = await fetchResourceInTeam<{
               data?: { category?: unknown; labels?: unknown[]; departments?: unknown[] };
-            }>({ method: 'GET', path: `/v3/expenses/${String(args.id)}` });
+            }>(client, 'expense', expenseIdArg(args));
             const cur = detail?.data ?? {};
             const present: CodingPresence = {
               hasCategory: isCodingPresent(cur.category),
@@ -273,7 +278,7 @@ export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayG
             if (ops.length === 0) return errorResult('No coding fields supplied.');
             const result = await client.request({
               method: 'PATCH',
-              path: `/v2/expenses/${String(args.id)}`,
+              path: expensePath,
               body: ops,
               headers: { 'Content-Type': 'application/json-patch+json' },
               idempotencyKey: typeof args.idempotencyKey === 'string' ? args.idempotencyKey : undefined,
@@ -345,6 +350,15 @@ function contractToolResult(name: string, args: GatewayJsonObject): GatewayToolR
     default:
       return errorResult(`Unsupported Corpay One gateway tool: ${name}`);
   }
+}
+
+/** The expense id argument, validated as a single path segment. */
+function expenseIdArg(args: GatewayJsonObject): string {
+  const id = args.id;
+  if (typeof id !== 'string' && typeof id !== 'number') {
+    throw new Error('id is required and must be a string or number.');
+  }
+  return String(id);
 }
 
 /** Coerce gateway args into query parameters (drops non-scalar values). */

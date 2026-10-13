@@ -1,3 +1,4 @@
+import { createHash, timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 
 export class HttpRequestError extends Error {
@@ -31,8 +32,35 @@ export function assertAuthorized(req: IncomingMessage, config = getHttpConfig())
     return;
   }
 
-  if (req.headers.authorization !== `Bearer ${config.httpToken}`) {
+  const header = req.headers.authorization;
+  if (typeof header !== 'string' || !constantTimeEqual(header, `Bearer ${config.httpToken}`)) {
     throw new HttpRequestError(401, 'Unauthorized');
+  }
+}
+
+/** Compare two strings in constant time (both sides hashed to equal length). */
+export function constantTimeEqual(a: string, b: string): boolean {
+  const left = createHash('sha256').update(a, 'utf8').digest();
+  const right = createHash('sha256').update(b, 'utf8').digest();
+  return timingSafeEqual(left, right);
+}
+
+/**
+ * Refuse to start an HTTP server that trusts a forwarded user identity
+ * (any `*_TRUST_FORWARDED_USER=true`) without MCP_HTTP_TOKEN: anyone able to
+ * reach the port could otherwise claim to be any user.
+ */
+export function assertSafeHttpStartup(
+  env: NodeJS.ProcessEnv = process.env,
+  config = getHttpConfig(),
+): void {
+  const trusting = Object.keys(env).filter(
+    key => /_TRUST_FORWARDED_USER$/.test(key) && env[key]?.trim().toLowerCase() === 'true',
+  );
+  if (trusting.length > 0 && !config.httpToken) {
+    throw new Error(
+      `${trusting.join(', ')} is enabled but MCP_HTTP_TOKEN is empty. Set MCP_HTTP_TOKEN so only the trusted proxy can reach this server, or disable forwarded-user trust.`,
+    );
   }
 }
 

@@ -8,15 +8,22 @@ import {
   endpointAvailable,
   findEndpoint,
   getCapability,
+  encodePathSegment,
   materializePath,
   searchCapabilities,
 } from '../corpay/catalog.js';
 import { hasScope } from '../corpay/scopes.js';
-import { prepareOperation, verifyPreparedOperation, type PreparedOperation } from '../corpay/operations.js';
+import {
+  assertCapabilityEndpoint,
+  prepareOperation,
+  verifyPreparedOperation,
+  type PreparedOperation,
+} from '../corpay/operations.js';
 import { checkPolicy, isApprovalCapability, loadPolicy } from '../corpay/policy.js';
 import { prepareExpenseCoding } from '../corpay/coding.js';
 import { isTeamPinned, pinnedTeamId, resolveTeamId, scopePathParams } from '../corpay/team.js';
 import { writeAuditEvent } from '../corpay/audit.js';
+import { assertPathParamsInTeam, assertResourceInTeam, fetchResourceInTeam } from '../corpay/ownership.js';
 import { formatUnknownError } from '../errors.js';
 
 const methodSchema = z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -40,6 +47,8 @@ const preparedOperationSchema = z.object({
   contentType: z.string().optional(),
   dryRun: z.literal(true),
   reason: z.string().trim().min(1),
+  preparedAt: z.string().trim().min(1),
+  expiresAt: z.string().trim().min(1),
   operationHash: z.string().trim().min(32),
   // Informational only — commit re-derives the decision from the verified
   // operation. Optional because z.unknown() is *required* inside a Zod object,
@@ -221,14 +230,7 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
       inputSchema: { expenseId: z.string().trim().min(1) },
       annotations: READ_ONLY,
     },
-    async input =>
-      jsonToolResult(
-        await client.request({
-          method: 'GET',
-          path: `/v3/expenses/${encodeURIComponent(input.expenseId)}`,
-          withTeamId: false,
-        }),
-      ),
+    async input => jsonToolResult(await fetchResourceInTeam(client, 'expense', input.expenseId)),
   );
 
   server.registerTool(
@@ -239,13 +241,15 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
       inputSchema: { expenseId: z.string().trim().min(1) },
       annotations: READ_ONLY,
     },
-    async input =>
-      jsonToolResult(
+    async input => {
+      await assertResourceInTeam(client, 'expense', input.expenseId);
+      return jsonToolResult(
         await client.request({
           method: 'GET',
-          path: `/v2/expenses/${encodeURIComponent(input.expenseId)}/activities`,
+          path: `/v2/expenses/${encodePathSegment(input.expenseId, 'expenseId')}/activities`,
         }),
-      ),
+      );
+    },
   );
 
   server.registerTool(
@@ -256,13 +260,15 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
       inputSchema: { expenseId: z.string().trim().min(1) },
       annotations: READ_ONLY,
     },
-    async input =>
-      jsonToolResult(
+    async input => {
+      await assertResourceInTeam(client, 'expense', input.expenseId);
+      return jsonToolResult(
         await client.request({
           method: 'GET',
-          path: `/v2/expenses/${encodeURIComponent(input.expenseId)}/approvers`,
+          path: `/v2/expenses/${encodePathSegment(input.expenseId, 'expenseId')}/approvers`,
         }),
-      ),
+      );
+    },
   );
 
   // ------------------------------------------------------------ coding vocabulary
@@ -485,10 +491,12 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
         );
       }
       const pathParams = scopePathParams(input.pathTemplate, input.pathParams);
+      const path = materializePath(endpoint, pathParams);
+      await assertPathParamsInTeam(client, input.pathTemplate, pathParams);
       return jsonToolResult(
         await client.request({
           method: 'GET',
-          path: materializePath(endpoint, pathParams),
+          path,
           query: input.query,
         }),
       );
@@ -552,7 +560,7 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
     },
     async input =>
       jsonToolResult(
-        prepareOperation({
+        await prepareScoped(client, {
           capability: 'corpay_prepare_expense_amount_lines',
           method: 'PATCH',
           pathTemplate: '/v2/expenses/{expenseId}/amountlines',
@@ -589,7 +597,7 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
         const teamId = resolveTeamId(input.teamId);
         const { reason, teamId: _ignored, creditAccountId, creditAccountTransactionId, ...fields } = input;
         return jsonToolResult(
-          prepareOperation({
+          await prepareScoped(client, {
             capability: 'corpay_prepare_card_transaction_coding',
             method: 'PATCH',
             pathTemplate:
@@ -625,7 +633,7 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
       }
       const isCreate = input.action === 'create';
       return jsonToolResult(
-        prepareOperation({
+        await prepareScoped(client, {
           capability: 'corpay_prepare_vendor_change',
           method: isCreate ? 'POST' : 'PATCH',
           pathTemplate: isCreate
@@ -644,7 +652,7 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
     {
       title: 'Prepare Corpay One Coding List Change',
       description:
-        `Dry-run a change to the coding vocabulary — ${codingDimensions()}. Pass the allowlisted endpoint for the exact operation; find it with corpay_search_capabilities.`,
+        `Dry-run a change to the coding vocabulary — ${codingDimensions()}. Pass the allowlisted categories/departments/lists/labels/items endpoint for the exact operation; find it with corpay_search_capabilities. Other endpoints are refused.`,
       inputSchema: {
         method: z.enum(['POST', 'PUT', 'PATCH']),
         pathTemplate: z.string().trim().min(1).describe('e.g. /v1/teams/{teamId}/categories'),
@@ -657,7 +665,7 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
     },
     async input =>
       jsonToolResult(
-        prepareOperation({
+        await prepareScoped(client, {
           capability: 'corpay_prepare_coding_list_change',
           method: input.method,
           pathTemplate: input.pathTemplate,
@@ -689,7 +697,7 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
       if (input.action === 'delete') {
         if (!input.webhookId) return errorResult('webhookId is required for delete.');
         return jsonToolResult(
-          prepareOperation({
+          await prepareScoped(client, {
             capability: 'corpay_prepare_webhook_change',
             method: 'DELETE',
             pathTemplate: '/v1/webhooks/{webhookId}',
@@ -747,7 +755,7 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
     },
     async input =>
       jsonToolResult(
-        prepareOperation({
+        await prepareScoped(client, {
           capability: 'corpay_prepare_expense_approval',
           method: 'PATCH',
           pathTemplate:
@@ -826,6 +834,9 @@ async function commit(
     const endpoint = findEndpoint(operation.method, operation.pathTemplate);
     const pathParams = scopePathParams(operation.pathTemplate, operation.pathParams);
     const path = materializePath(endpoint, pathParams);
+    // Re-checked at commit: the resource could have moved, or the prepare may
+    // have come from a server that was not pinned.
+    await assertPathParamsInTeam(client, operation.pathTemplate, pathParams);
     const decision = checkPolicy({
       capability: operation.capability,
       method: operation.method,
@@ -885,6 +896,21 @@ async function commit(
     });
     return errorResult(message);
   }
+}
+
+/**
+ * Prepare an operation after verifying that any by-id resource it targets
+ * belongs to the pinned team.
+ */
+async function prepareScoped(
+  client: CorpayClient,
+  input: Parameters<typeof prepareOperation>[0],
+): Promise<PreparedOperation> {
+  findEndpoint(input.method, input.pathTemplate);
+  assertCapabilityEndpoint(input.capability, input.method, input.pathTemplate);
+  const pathParams = scopePathParams(input.pathTemplate, input.pathParams);
+  await assertPathParamsInTeam(client, input.pathTemplate, pathParams);
+  return prepareOperation(input);
 }
 
 /**

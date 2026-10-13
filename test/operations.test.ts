@@ -51,7 +51,7 @@ describe('prepare/commit ceremony', () => {
 
   it('hashes independently of key order', () => {
     const a = prepareOperation({
-      capability: 'c',
+      capability: 'corpay_prepare_expense_amount_lines',
       method: 'PATCH',
       pathTemplate: '/v2/expenses/{expenseId}/amountlines',
       pathParams: { expenseId: 'E1' },
@@ -59,7 +59,7 @@ describe('prepare/commit ceremony', () => {
       reason: 'r',
     });
     const b = prepareOperation({
-      capability: 'c',
+      capability: 'corpay_prepare_expense_amount_lines',
       method: 'PATCH',
       pathTemplate: '/v2/expenses/{expenseId}/amountlines',
       pathParams: { expenseId: 'E1' },
@@ -78,7 +78,7 @@ describe('prepare/commit ceremony', () => {
   it('refuses to prepare an endpoint that is not allowlisted', () => {
     expect(() =>
       prepareOperation({
-        capability: 'c',
+        capability: 'corpay_prepare_expense_amount_lines',
         method: 'POST',
         pathTemplate: '/v2/expenses/{expenseId}/pay',
         reason: 'r',
@@ -115,6 +115,7 @@ describe('expense coding', () => {
   function clientReturning(expense: unknown): CorpayClient {
     return {
       request: async () => ({ data: expense }),
+      pinnedTeam: () => undefined,
     } as unknown as CorpayClient;
   }
 
@@ -167,7 +168,7 @@ describe('expense coding', () => {
   });
 
   it('reports an expense it cannot read', async () => {
-    const client = { request: async () => ({}) } as unknown as CorpayClient;
+    const client = { request: async () => ({}), pinnedTeam: () => undefined } as unknown as CorpayClient;
     await expect(
       prepareExpenseCoding(client, { expenseId: 'E9', categoryId: 'C1', reason: 'r' }),
     ).rejects.toThrow(/was not found/);

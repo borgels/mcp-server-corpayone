@@ -264,8 +264,37 @@ export function materializePath(
     if (value === undefined) {
       throw new Error(`Missing path parameter: ${key}`);
     }
-    return encodeURIComponent(String(value));
+    return encodePathSegment(value, key);
   });
+}
+
+/**
+ * Reject a value that could change which resource a path points at once it is
+ * interpolated: empty, dot segments, separators, query/fragment markers, or
+ * their percent-encoded forms (which some proxies and servers decode).
+ */
+export function assertSafePathSegment(value: unknown, name = 'path parameter'): string {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    throw new Error(`Invalid ${name}: expected a string or number.`);
+  }
+  const text = String(value);
+  if (
+    text === '' ||
+    text.trim() === '' ||
+    text === '.' ||
+    text === '..' ||
+    /[/\\?#]/.test(text) ||
+    /%(2e|2f|5c|3f|23)/i.test(text) ||
+    /[\u0000-\u001f\u007f]/.test(text)
+  ) {
+    throw new Error(`Invalid ${name}: ${JSON.stringify(text)} is not a single path segment.`);
+  }
+  return text;
+}
+
+/** Validate then percent-encode one path segment. */
+export function encodePathSegment(value: unknown, name = 'path parameter'): string {
+  return encodeURIComponent(assertSafePathSegment(value, name));
 }
 
 function endpointCapabilities(): Capability[] {
