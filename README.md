@@ -107,6 +107,12 @@ redirected. Without it, callers choose the team themselves — appropriate when
 the grant belongs to the person using it, but not when several people share one
 endpoint.
 
+Endpoints that address a resource by id alone (`/v3/expenses/{id}`,
+`/v2/expenses/{id}/…`, `/v1/webhooks/{id}`) are checked too: on a pinned
+server the resource is read first and its team compared with
+`CORPAYONE_TEAM_ID`, both when preparing and again when committing. If the
+team of a resource cannot be determined the call is refused.
+
 Find team ids with `corpay_list_teams`.
 
 ### Write policy
@@ -138,6 +144,12 @@ Pass that operation back to `corpay_commit_prepared_operation` — unchanged, wi
 the hash restated and an `idempotencyKey` — to execute it. Editing the payload
 in between invalidates the hash.
 
+The `operationHash` is an HMAC-SHA256 keyed by `CORPAYONE_PREPARE_SECRET`
+(a random per-process key when unset — set it when running several replicas,
+or when a prepare must survive a restart). A prepared operation expires after
+15 minutes, and each prepare tool can only target its own endpoints, which is
+re-checked at commit.
+
 Approvals are committed with `corpay_commit_expense_approval` instead; the two
 commit tools will not accept each other's operations.
 
@@ -165,7 +177,9 @@ docker run --rm -p 3000:3000 --env-file corpayone.env \
 
 The HTTP transport binds to loopback by default and expects to sit behind a
 reverse proxy that terminates TLS and authenticates callers. `MCP_HTTP_TOKEN`
-adds a bearer check; `MCP_ALLOWED_ORIGINS` restricts browser origins.
+adds a bearer check (compared in constant time); `MCP_ALLOWED_ORIGINS`
+restricts browser origins. If any `*_TRUST_FORWARDED_USER` variable is `true`,
+the HTTP transport refuses to start without `MCP_HTTP_TOKEN`.
 
 ## Verifying a deployment
 

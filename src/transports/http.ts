@@ -3,6 +3,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { createServer as createMcpServer } from '../server.js';
 import {
   assertAllowedOrigin,
+  assertSafeHttpStartup,
   assertAuthorized,
   corsHeaders,
   getHttpConfig,
@@ -12,6 +13,13 @@ import {
 } from './http-helpers.js';
 
 const config = getHttpConfig();
+
+try {
+  assertSafeHttpStartup(process.env, config);
+} catch (error) {
+  console.error((error as Error).message);
+  process.exit(1);
+}
 
 const httpServer = createNodeServer(async (req, res) => {
   try {

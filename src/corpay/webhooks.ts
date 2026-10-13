@@ -12,14 +12,34 @@ export function validateWebhookSignature(
   rawBody: string,
   webhookSecret: string,
 ): boolean {
-  const match = /t=(.*?);v1=(.*)/i.exec(signatureHeader);
-  if (!match || !match[1] || !match[2]) return false;
-  const timestamp = Number(match[1]);
+  const parsed = parseSignatureHeader(signatureHeader);
+  if (!parsed) return false;
+  const timestamp = Number(parsed.t);
   if (!Number.isFinite(timestamp)) return false;
-  const provided = match[2].toLowerCase();
+  const provided = parsed.v1.toLowerCase();
+  if (!/^[0-9a-f]+$/.test(provided)) return false;
   const expected = createHmac('sha512', webhookSecret)
     .update(`${timestamp}.${rawBody}`)
     .digest('hex');
   if (provided.length !== expected.length) return false;
   return timingSafeEqual(Buffer.from(provided), Buffer.from(expected));
+}
+
+/**
+ * Split `t=<epochSeconds>;v1=<hex>` without a backtracking regex. Parts are
+ * `;`-separated `key=value` pairs; keys are matched case-insensitively.
+ */
+function parseSignatureHeader(header: string): { t: string; v1: string } | undefined {
+  if (typeof header !== 'string' || header.length > 4096) return undefined;
+  let t: string | undefined;
+  let v1: string | undefined;
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq < 0) continue;
+    const key = part.slice(0, eq).trim().toLowerCase();
+    const value = part.slice(eq + 1).trim();
+    if (key === 't' && t === undefined) t = value;
+    else if (key === 'v1' && v1 === undefined) v1 = value;
+  }
+  return t && v1 ? { t, v1 } : undefined;
 }

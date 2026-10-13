@@ -11,6 +11,7 @@
  */
 import { createServer } from 'node:http';
 import { readFileSync } from 'node:fs';
+import { buildAuthorizeUrl, createPkcePair, createState, stateMatches } from './pkce.js';
 
 // Load .env.local (KEY=VALUE lines) into process.env so the helper is runnable
 // with `npm run auth:grant` without exporting variables first.
@@ -83,14 +84,19 @@ if (!clientId || !clientSecret) {
   process.exit(1);
 }
 
-const authorizeUrl =
-  `${identityBase}/connect/authorize?` +
-  new URLSearchParams({
-    client_id: clientId,
-    scope,
-    response_type: 'code',
-    redirect_uri: redirectUri,
-  }).toString();
+// CSRF protection and code-interception protection for the redirect: the
+// callback must echo this state, and the code is useless without the verifier.
+const state = createState();
+const pkce = createPkcePair();
+
+const authorizeUrl = buildAuthorizeUrl({
+  identityBase,
+  clientId,
+  scope,
+  redirectUri,
+  state,
+  codeChallenge: pkce.challenge,
+});
 
 const redirect = new URL(redirectUri);
 const port = Number(redirect.port || 80);
@@ -109,6 +115,7 @@ async function exchange(code: string): Promise<void> {
       grant_type: 'authorization_code',
       scope,
       redirect_uri: redirectUri,
+      code_verifier: pkce.verifier,
     }).toString(),
   });
   const data = (await response.json()) as { refresh_token?: string; access_token?: string };
@@ -156,23 +163,32 @@ function extractTeamIds(teams: unknown): string[] {
     .map(String);
 }
 
+let handled = false;
+
 const server = createServer((req, res) => {
-  const url = new URL(req.url ?? '/', `http://${req.headers.host}`);
+  const url = new URL(req.url ?? '/', 'http://127.0.0.1');
   if (url.pathname !== redirect.pathname) {
     res.writeHead(404).end();
+    return;
+  }
+  if (!stateMatches(state, url.searchParams.get('state'))) {
+    res.writeHead(400, { 'Content-Type': 'text/plain' });
+    res.end('State mismatch; ignoring this callback.');
     return;
   }
   const code = url.searchParams.get('code');
   res.writeHead(200, { 'Content-Type': 'text/plain' });
   res.end(code ? 'Authorization captured. You can close this tab.' : 'No authorization code.');
-  if (code) {
+  if (code && !handled) {
+    handled = true;
     exchange(code)
       .catch(error => console.error(error))
       .finally(() => server.close(() => process.exit(0)));
   }
 });
 
-server.listen(port, () => {
+// Loopback only: the callback carries an authorization code.
+server.listen(port, '127.0.0.1', () => {
   console.log('Open this URL, log in, and approve access:\n');
   console.log(authorizeUrl);
   console.log(`\nListening for the redirect on ${redirectUri} ...`);

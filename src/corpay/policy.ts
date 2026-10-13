@@ -92,10 +92,45 @@ export function endpointRisk(
   }
 }
 
+/**
+ * Normalize a request path the way the server will see it: drop any query or
+ * fragment, resolve dot segments, collapse repeated slashes, and decode
+ * percent-escapes. Policy patterns are matched against this form (and the
+ * still-encoded form), so encoding or `..` cannot step around a deny rule.
+ */
+export function normalizePolicyPath(path: string): { encoded: string; decoded: string } {
+  let encoded: string;
+  try {
+    encoded = new URL(path.startsWith('/') ? path : `/${path}`, 'http://policy.invalid').pathname;
+  } catch {
+    encoded = path;
+  }
+  encoded = encoded.replace(/\/{2,}/g, '/');
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(encoded);
+  } catch {
+    decoded = encoded;
+  }
+  // A decoded `..` or `/` may form new segments; resolve those as well.
+  try {
+    decoded = new URL(decoded.replace(/\\/g, '/'), 'http://policy.invalid').pathname;
+  } catch {
+    // keep the decoded form
+  }
+  return { encoded, decoded: decoded.replace(/\/{2,}/g, '/') };
+}
+
 export function checkPolicy(input: PolicyCheckInput, policy = loadPolicy()): PolicyDecision {
   if (!isMutation(input.method)) {
     return { allowed: true, reason: 'read operation', policy };
   }
+
+  const normalized = normalizePolicyPath(input.path);
+  if (normalized.encoded !== input.path.split(/[?#]/)[0]) {
+    return { allowed: false, reason: `path is not in normal form: ${input.path}`, policy };
+  }
+  const paths = [normalized.encoded, normalized.decoded];
 
   if (!policy.writesEnabled) {
     return { allowed: false, reason: 'writes disabled (CORPAYONE_ENABLE_WRITES)', policy };
@@ -114,7 +149,7 @@ export function checkPolicy(input: PolicyCheckInput, policy = loadPolicy()): Pol
         policy,
       };
     }
-    if (!APPROVAL_PATHS.test(input.path)) {
+    if (!paths.every(path => APPROVAL_PATHS.test(path))) {
       return {
         allowed: false,
         reason: `approval capability used outside its endpoints: ${input.path}`,
@@ -142,7 +177,12 @@ export function checkPolicy(input: PolicyCheckInput, policy = loadPolicy()): Pol
     return { allowed: false, reason: `method not allowed: ${input.method}`, policy };
   }
 
-  if (policy.deniedPathPatterns.some(pattern => new RegExp(pattern, 'i').test(input.path))) {
+  if (
+    policy.deniedPathPatterns.some(pattern => {
+      const re = new RegExp(pattern, 'i');
+      return paths.some(path => re.test(path));
+    })
+  ) {
     return { allowed: false, reason: `path denied by policy: ${input.path}`, policy };
   }
 
