@@ -97,6 +97,9 @@ describe('by-id resources are scoped to the pinned team', () => {
     expect(extractTeamId({ data: { TeamId: PINNED } })).toBe(PINNED);
     expect(extractTeamId({ data: { team: { id: PINNED } } })).toBe(PINNED);
     expect(extractTeamId({ data: { expense: { teamId: PINNED } } }, 'expense')).toBe(PINNED);
+    // Shape returned by the live /v3/expenses/{id} endpoint.
+    expect(extractTeamId({ data: { id: 'x', owner: { team: { id: PINNED } }, creditor: { id: 'c' } } }, 'expense')).toBe(PINNED);
+    expect(extractTeamId({ data: { owner: { team: { id: 'OTHER' } } } }, 'expense')).toBe('OTHER');
     expect(extractTeamId({ data: { id: 'E1' } })).toBeUndefined();
     expect(extractTeamId({ teamId: PINNED, data: { teamId: OTHER } })).toBeUndefined();
   });

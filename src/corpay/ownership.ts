@@ -100,7 +100,8 @@ export function assertPayloadInTeam(
 /**
  * Find the owning team id in a Corpay response. Corpay wraps single resources
  * as `{ data: { ... } }` (sometimes `{ data: { expense: { ... } } }`) and
- * names the field `teamId` (casing varies) or nests it as `team: { id }`.
+ * names the field `teamId` (casing varies) or nests it as `team: { id }`,
+ * directly or under `owner` (expenses: `data.owner.team.id`).
  * Returns undefined when no team is present, or when the candidates disagree.
  */
 export function extractTeamId(payload: unknown, kind?: TeamOwnedResource): string | undefined {
@@ -120,7 +121,13 @@ export function extractTeamId(payload: unknown, kind?: TeamOwnedResource): strin
   const data = isRecord(payload) ? payload.data : undefined;
   visit(payload);
   visit(data);
-  if (kind && isRecord(data)) visit(data[kind]);
+  // Live /v3/expenses/{id} responses carry the team as data.owner.team.id.
+  if (isRecord(data)) visit(data.owner);
+  if (kind && isRecord(data)) {
+    visit(data[kind]);
+    const nested = data[kind];
+    if (isRecord(nested)) visit(nested.owner);
+  }
 
   return candidates.size === 1 ? [...candidates][0] : undefined;
 }
