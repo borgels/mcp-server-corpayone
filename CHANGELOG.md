@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- `corpay_get_expense_attachment` returns an expense's attachment — the
+  original file (usually PDF) or its rendered pages as images — with a signed
+  download link. Fetched only from Corpay's attachment host, without
+  credentials, capped at 15 MB and 10 pages.
+
 Security hardening.
 
 - On a server pinned with `CORPAYONE_TEAM_ID`, by-id expense and webhook

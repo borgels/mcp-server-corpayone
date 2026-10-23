@@ -11,8 +11,8 @@ change is reviewed before it happens.
 ## What it can do
 
 **Read** — expenses (bills, receipts, credit notes) with their state, vendor,
-amounts, attachments and coding; the activity log and approver list for an
-expense; the coding vocabulary (categories, label lists and labels); vendors;
+amounts, attachments and coding; the attachment files themselves; the activity
+log and approver list for an expense; the coding vocabulary (categories, label lists and labels); vendors;
 webhook subscriptions. With broader scopes also credit accounts and card
 transactions, payment methods, team members, departments and items — see below.
 
@@ -190,6 +190,24 @@ CORPAYONE_TEAM_ID=<team> npm run smoke:live   # read-only, hits the real API
 
 The live smoke test also asserts that a cross-team read is refused, so it
 doubles as a check that the boundary is actually in force.
+
+## Attachments
+
+`corpay_get_expense_attachment` returns the invoice or receipt file itself.
+Corpay has no endpoint that serves the file: `/v3/expenses/{id}` lists each
+attachment with a CloudFront URL signed for about an hour — the original
+upload (`isOriginal`, usually a PDF) plus one rendered JPG per page. The server
+downloads from that URL and returns the content:
+
+- `format: "file"` (default) — the original, as an embedded resource (PDF) or
+  an image.
+- `format: "pages"` — the rendered pages as images, which every MCP client can
+  show to the model. Use this to read what an invoice says.
+
+Each result also carries the signed `downloadUrl` and when it expires. The
+expense is team-checked first, only `https://attachments.corpayone.com` is
+fetched, no credentials are sent to it, redirects are refused, and a call
+returns at most 15 MB and 10 pages.
 
 ## Webhooks
 
