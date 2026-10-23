@@ -24,6 +24,17 @@ import { prepareExpenseCoding } from '../corpay/coding.js';
 import { isTeamPinned, pinnedTeamId, resolveTeamId, scopePathParams } from '../corpay/team.js';
 import { writeAuditEvent } from '../corpay/audit.js';
 import { assertPathParamsInTeam, assertResourceInTeam, fetchResourceInTeam } from '../corpay/ownership.js';
+import {
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_PAGES,
+  assertAttachmentUrl,
+  attachmentFileName,
+  attachmentMimeType,
+  attachmentUrlExpiry,
+  extractAttachments,
+  renderedPages,
+  selectAttachment,
+} from '../corpay/attachments.js';
 import { formatUnknownError } from '../errors.js';
 
 const methodSchema = z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
@@ -231,6 +242,83 @@ export function registerCorpayTools(server: McpServer, client: CorpayClient): vo
       annotations: READ_ONLY,
     },
     async input => jsonToolResult(await fetchResourceInTeam(client, 'expense', input.expenseId)),
+  );
+
+  server.registerTool(
+    'corpay_get_expense_attachment',
+    {
+      title: 'Get Corpay One Expense Attachment',
+      description:
+        'The file behind an expense — the invoice or receipt itself. format "file" (default) returns the original upload (usually a PDF); format "pages" returns the rendered page images, which is the way to read an invoice\'s content. Both also give a download link valid for about an hour. Without attachmentId the original is used; ids are listed in corpay_get_expense.',
+      inputSchema: {
+        expenseId: z.string().trim().min(1),
+        attachmentId: z.string().trim().min(1).optional(),
+        format: z.enum(['file', 'pages']).optional(),
+      },
+      annotations: READ_ONLY,
+    },
+    async input => {
+      const expense = await fetchResourceInTeam(client, 'expense', input.expenseId);
+      const attachments = extractAttachments(expense);
+      const selected = selectAttachment(attachments, input.attachmentId);
+      const original = selected.parentId ? (attachments.find(a => a.id === selected.parentId) ?? selected) : selected;
+
+      const targets = input.format === 'pages' ? renderedPages(attachments, original) : [selected];
+      // An image upload has no rendered pages; it is its own page.
+      if (targets.length === 0) targets.push(original);
+      const returned = targets.slice(0, MAX_ATTACHMENT_PAGES);
+
+      const content: Array<
+        | { type: 'text'; text: string }
+        | { type: 'image'; data: string; mimeType: string }
+        | { type: 'resource'; resource: { uri: string; mimeType: string; blob: string } }
+      > = [];
+      const files = [];
+      let budget = MAX_ATTACHMENT_BYTES;
+      for (const attachment of returned) {
+        assertAttachmentUrl(attachment.url);
+        const { bytes, contentType } = await client.download(attachment.url, budget);
+        budget -= bytes.byteLength;
+        const mimeType = attachmentMimeType(attachment, contentType);
+        const fileName = attachmentFileName(attachment);
+        const data = bytes.toString('base64');
+        content.push(
+          mimeType.startsWith('image/')
+            ? { type: 'image', data, mimeType }
+            : {
+                type: 'resource',
+                resource: {
+                  uri: `corpay://expenses/${encodeURIComponent(input.expenseId)}/attachments/${encodeURIComponent(attachment.id)}/${encodeURIComponent(fileName)}`,
+                  mimeType,
+                  blob: data,
+                },
+              },
+        );
+        files.push({
+          id: attachment.id,
+          fileName,
+          mimeType,
+          bytes: bytes.byteLength,
+          downloadUrl: attachment.url,
+          downloadUrlExpiresAt: attachmentUrlExpiry(attachment),
+        });
+      }
+
+      const summary = {
+        expenseId: input.expenseId,
+        files,
+        ...(targets.length > returned.length
+          ? { omittedPages: targets.length - returned.length, note: `Only the first ${MAX_ATTACHMENT_PAGES} pages are returned; the original holds them all.` }
+          : {}),
+        attachments: attachments.map(a => ({
+          id: a.id,
+          fileName: attachmentFileName(a),
+          isOriginal: a.isOriginal,
+          ...(a.parentId ? { parentId: a.parentId } : {}),
+        })),
+      };
+      return { content: [{ type: 'text' as const, text: JSON.stringify(summary, null, 2) }, ...content] };
+    },
   );
 
   server.registerTool(
