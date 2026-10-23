@@ -186,6 +186,47 @@ export class CorpayClient {
     }
     return payload as T;
   }
+
+  /**
+   * Fetch a pre-signed file URL (an expense attachment). The URL carries its
+   * own signature, so no credentials are sent — the bearer token must never
+   * reach the CDN. Redirects are refused and the body is capped at maxBytes.
+   */
+  async download(url: string, maxBytes: number): Promise<{ bytes: Buffer; contentType?: string }> {
+    const response = await this.fetchImpl(url, {
+      method: 'GET',
+      redirect: 'error',
+      signal: AbortSignal.timeout(this.timeoutMs),
+    });
+    if (!response.ok) {
+      throw new CorpayHttpError({
+        status: response.status,
+        method: 'GET',
+        url: url.split('?')[0] as string,
+        payload: null,
+        fallbackMessage: 'attachment download failed',
+      });
+    }
+    const declared = Number(response.headers.get('content-length') ?? NaN);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      throw new Error(`Attachment is ${declared} bytes, over the ${maxBytes}-byte limit.`);
+    }
+    const chunks: Buffer[] = [];
+    let total = 0;
+    if (response.body) {
+      for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
+        total += chunk.byteLength;
+        if (total > maxBytes) {
+          throw new Error(`Attachment exceeds the ${maxBytes}-byte limit.`);
+        }
+        chunks.push(Buffer.from(chunk));
+      }
+    }
+    return {
+      bytes: Buffer.concat(chunks),
+      contentType: response.headers.get('content-type')?.split(';')[0]?.trim() || undefined,
+    };
+  }
 }
 
 /**

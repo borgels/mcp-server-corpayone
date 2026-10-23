@@ -179,6 +179,7 @@ export const CURATED_CAPABILITIES: Capability[] = [
   tool('corpay_list_teams', 'List teams', 'List teams the grant can reach. A scoped server reports only its own.', 'read', ['team', 'company']),
   tool('corpay_list_expenses', 'List expenses', 'List bills, receipts and credit notes, filtered by state or type.', 'read', ['expense', 'bill', 'invoice', 'receipt', 'inbox']),
   tool('corpay_get_expense', 'Get expense', 'Full detail for one expense: vendor, amounts, lines and coding.', 'read', ['expense', 'bill', 'detail']),
+  tool('corpay_get_expense_attachment', 'Get expense attachment', 'The invoice or receipt file itself: the original (usually PDF) or its rendered page images, plus a download link.', 'read', ['expense', 'attachment', 'invoice', 'receipt', 'pdf', 'download', 'bilag']),
   tool('corpay_get_expense_activities', 'Get expense activity log', 'The activity and history trail for an expense.', 'read', ['expense', 'history', 'audit']),
   tool('corpay_get_expense_approvers', 'Get expense approvers', 'Who must approve an expense, and who already has.', 'read', ['expense', 'approval']),
   tool('corpay_list_coding_options', 'List coding options', 'Categories, label lists, departments and items in one read — the vocabulary for coding an expense.', 'read', ['coding', 'category', 'account', 'label', 'department', 'dimension', 'item']),
