@@ -4,7 +4,7 @@ import { encodePathSegment } from './corpay/catalog.js';
 import { fetchResourceInTeam } from './corpay/ownership.js';
 import { formatUnknownError } from './errors.js';
 
-// Re-exported so an embedding control plane can validate inbound Corpay One
+// Re-exported so an embedding host can validate inbound Corpay One
 // webhooks and filter event types without reaching into package internals.
 export { validateWebhookSignature } from './corpay/webhooks.js';
 export { WEBHOOK_EVENTS } from './corpay/catalog.js';
@@ -12,15 +12,14 @@ export { WEBHOOK_EVENTS } from './corpay/catalog.js';
 /**
  * Gateway contract for Corpay One.
  *
- * Matches the e-conomic gateway shape exactly so an embedding control plane
- * can wrap Corpay One as a provider without copying connector
- * logic: stable, unprefixed tool definitions (`riskLevel`/`enabledByDefault`) and
+ * A plain export for embedding hosts that wrap Corpay One as a provider
+ * without copying connector logic: stable, unprefixed tool definitions (`riskLevel`/`enabledByDefault`) and
  * a `callTool` returning a `GatewayToolResult`. Reads are enabled by default; the
  * coding write is disabled by default and gated by the connector's write policy.
  */
 export type GatewayRiskLevel = 'read' | 'write' | 'destructive';
-// Structurally identical to the sibling connector gateways (e-conomic et al.)
-// so this gateway plugs into the control plane's shared connector typing.
+// Plain JSON types, so an embedding host can use its own structurally
+// compatible connector typing.
 export type GatewayJsonValue =
   | string
   | number
@@ -146,7 +145,7 @@ export interface CorpayGatewayOptions {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   /**
-   * Enable coding writes for this gateway instance. A control plane that wraps
+   * Enable coding writes for this gateway instance. An embedding host that wraps
    * the gateway and applies its own write governance (scopes, approvals, audit)
    * passes `true` to opt in, instead of relying on the CORPAYONE_ENABLE_WRITES
    * environment flag used by the standalone server. Defaults to the env flag.

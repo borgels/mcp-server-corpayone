@@ -1,80 +1,38 @@
-import { createServer as createNodeServer } from 'node:http';
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { createServer as createMcpServer } from '../server.js';
-import {
-  assertAllowedOrigin,
-  assertSafeHttpStartup,
-  assertAuthorized,
-  corsHeaders,
-  getHttpConfig,
-  HttpRequestError,
-  readJsonBody,
-  sendJson,
-} from './http-helpers.js';
+import { CorpayClient } from '../corpay/client.js';
+import { assertSafeHttpStartup, configWarnings, getHttpConfig, type HttpConfig } from './http-helpers.js';
+import { startHttpServer } from './http-server.js';
 
-const config = getHttpConfig();
+async function main(): Promise<void> {
+  let config: HttpConfig;
+  try {
+    config = getHttpConfig();
+    assertSafeHttpStartup(process.env, config);
+    // Validate the Corpay One client configuration (base URLs, timeout) once
+    // at startup instead of on the first request.
+    new CorpayClient();
+  } catch (error) {
+    console.error(
+      `Corpay One MCP HTTP server not started: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  }
 
-try {
-  assertSafeHttpStartup(process.env, config);
-} catch (error) {
-  console.error((error as Error).message);
-  process.exit(1);
+  for (const warning of configWarnings(config)) {
+    console.error(warning);
+  }
+
+  const running = await startHttpServer(config);
+  console.error(`Corpay One MCP HTTP server listening on http://${config.host}:${running.port}/mcp`);
+
+  const shutdown = (signal: string) => {
+    console.error(`Received ${signal}, shutting down`);
+    void running.close().then(() => process.exit(0));
+  };
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
+  process.once('SIGINT', () => shutdown('SIGINT'));
 }
 
-const httpServer = createNodeServer(async (req, res) => {
-  try {
-    if (req.url !== '/mcp') {
-      sendJson(res, 404, { error: 'Not found' }, req);
-      return;
-    }
-
-    assertAllowedOrigin(req);
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204, corsHeaders(req));
-      res.end();
-      return;
-    }
-
-    if (req.method !== 'POST') {
-      sendJson(res, 405, { error: 'Method not allowed' }, req, { Allow: 'POST' });
-      return;
-    }
-
-    assertAuthorized(req, config);
-    const body = await readJsonBody(req, config.maxBodyBytes);
-    const mcpServer = createMcpServer();
-    const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: undefined,
-    });
-
-    await mcpServer.connect(transport);
-    await transport.handleRequest(req, res, body);
-
-    res.on('close', () => {
-      void transport.close();
-      void mcpServer.close();
-    });
-  } catch (error) {
-    console.error(error);
-    if (!res.headersSent) {
-      if (error instanceof HttpRequestError) {
-        sendJson(res, error.status, { error: error.message }, req);
-        return;
-      }
-
-      sendJson(res, 500, {
-        jsonrpc: '2.0',
-        error: {
-          code: -32603,
-          message: 'Internal server error',
-        },
-        id: null,
-      }, req);
-    }
-  }
-});
-
-httpServer.listen(config.port, config.host, () => {
-  console.error(`Corpay One MCP HTTP server listening on http://${config.host}:${config.port}/mcp`);
+main().catch(error => {
+  console.error(error);
+  process.exit(1);
 });

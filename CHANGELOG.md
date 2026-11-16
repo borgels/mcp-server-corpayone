@@ -1,6 +1,45 @@
 # Changelog
 
-## Unreleased
+## 1.1.0
+
+HTTP transport, upstream client and supply chain.
+
+- HTTP transport fails closed: it refuses to start on a non-loopback bind, or
+  with `MCP_ALLOW_ANY_ORIGIN=true`, unless `MCP_HTTP_TOKEN` is set.
+  `MCP_HTTP_ALLOW_UNAUTHENTICATED=true` is an explicit escape hatch.
+- `MCP_HTTP_TOKEN` must be at least 32 printable ASCII characters without
+  whitespace.
+- Failed authentication is limited per client address (429 with
+  `Retry-After`; `MCP_AUTH_FAILURE_LIMIT`, `MCP_AUTH_FAILURE_WINDOW_MS`).
+  Requests with a valid token are never throttled.
+- `Host` header check on loopback binds (`MCP_ALLOWED_HOSTS` to override).
+- 401 responses carry `WWW-Authenticate: Bearer`; invalid JSON gets 400
+  instead of 500; oversized bodies get 413 before they are read.
+- `GET /healthz` (unauthenticated) and graceful shutdown on SIGTERM/SIGINT.
+- `PORT`, `MCP_MAX_BODY_BYTES` and boolean flags are validated at startup.
+- CI runs on pull requests and before every image publish; images are only
+  published from `main` and `v*` tags, with SBOM and provenance attestations.
+  GitHub Actions are pinned to commit SHAs.
+- Dependency updates; `npm audit --omit=dev` is clean.
+- Upstream requests no longer follow redirects, so the OAuth client secret
+  and bearer token are never resent to a redirect target; a redirect is
+  reported as an error. Upstream error bodies are read up to 64 KB.
+- `CORPAYONE_TIMEOUT_MS` is validated (1-600000) instead of becoming `NaN`.
+- The server reports the package version.
+
+### Upgrade notes
+
+- A deployment that binds a non-loopback address (for example `0.0.0.0` in a
+  container) now needs `MCP_HTTP_TOKEN` of at least 32 characters, or the
+  server exits at startup. A 64-character hex token (`openssl rand -hex 32`)
+  works unchanged.
+- Shorter tokens, tokens with whitespace or a trailing newline, and
+  non-numeric or out-of-range numeric settings are rejected at startup.
+- New optional variables: `MCP_HTTP_ALLOW_UNAUTHENTICATED`,
+  `MCP_ALLOWED_HOSTS`, `MCP_AUTH_FAILURE_LIMIT`, `MCP_AUTH_FAILURE_WINDOW_MS`.
+- `CORPAYONE_TIMEOUT_MS` must be an integer between 1 and 600000.
+
+Also in this release:
 
 - `corpay_get_expense_attachment` returns an expense's attachment — the
   original file (usually PDF) or its rendered pages as images — with a signed
@@ -85,7 +124,7 @@ First release usable as a hosted, multi-company deployment.
   connector's prepare → commit (allowlist + write policy + operation hash). The
   PATCH endpoint stays provisional until confirmed live. Re-exported
   `validateWebhookSignature` and `WEBHOOK_EVENTS` from the gateway entry so the
-  Borgels control plane can validate inbound webhooks without package internals.
+  an embedding host can validate inbound webhooks without package internals.
 - Built the client against the official Corpay One API contract: OAuth 2.0
   (authorization_code + refresh_token, auto-refreshed Bearer access tokens),
   `/external` base with version-prefixed endpoints (`GET /v1/teams`,
@@ -103,6 +142,6 @@ First release usable as a hosted, multi-company deployment.
   Credentials are read only from the server environment; writes are blocked
   unless explicitly enabled and go through a prepare → commit flow with policy
   checks and an operation hash. Includes discovery, an allowlisted endpoint
-  caller, and a Borgels gateway contract export. The Corpay One endpoint map is
+  caller, and a gateway contract export. The Corpay One endpoint map is
   provisional and verified against the live API (read-first) during connector
   bring-up before write tools are enabled.

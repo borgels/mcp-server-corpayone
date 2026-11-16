@@ -466,9 +466,13 @@ describe('HTTP transport token and startup checks', () => {
   it('compares tokens in constant time', () => {
     expect(constantTimeEqual('Bearer a', 'Bearer a')).toBe(true);
     expect(constantTimeEqual('Bearer a', 'Bearer ab')).toBe(false);
-    process.env.MCP_HTTP_TOKEN = 'secret';
-    expect(() => assertAuthorized({ headers: { authorization: 'Bearer secreT' } } as never)).toThrow(HttpRequestError);
-    expect(() => assertAuthorized({ headers: { authorization: 'Bearer secret' } } as never)).not.toThrow();
+    const config = { host: '127.0.0.1', port: 0, maxBodyBytes: 1, httpToken: `${'s'.repeat(31)}t` };
+    expect(() =>
+      assertAuthorized({ headers: { authorization: `Bearer ${'s'.repeat(31)}T` } } as never, config),
+    ).toThrow(HttpRequestError);
+    expect(() =>
+      assertAuthorized({ headers: { authorization: `Bearer ${'s'.repeat(31)}t` } } as never, config),
+    ).not.toThrow();
   });
 
   it('refuses to start when forwarded-user trust is on without a token', () => {

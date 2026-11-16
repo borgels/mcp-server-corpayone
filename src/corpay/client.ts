@@ -1,3 +1,4 @@
+import { readEnvInteger } from '../config-env.js';
 import { CorpayHttpError } from '../errors.js';
 import { assertNoForeignTeam, assertTeamAllowed, isTeamKey, pinnedTeamId } from './team.js';
 
@@ -74,7 +75,8 @@ export class CorpayClient {
     assertSafeBaseUrl(this.apiBaseUrl, 'CORPAYONE_API_BASE_URL');
     assertSafeBaseUrl(this.identityBaseUrl, 'CORPAYONE_IDENTITY_BASE_URL');
     this.fetchImpl = options.fetchImpl ?? fetch;
-    this.timeoutMs = options.timeoutMs ?? Number(process.env.CORPAYONE_TIMEOUT_MS ?? 30_000);
+    this.timeoutMs =
+      options.timeoutMs ?? readEnvInteger('CORPAYONE_TIMEOUT_MS', 30_000, { min: 1, max: 600_000 });
   }
 
   /**
@@ -108,8 +110,11 @@ export class CorpayClient {
         refresh_token: this.refreshToken,
         grant_type: 'refresh_token',
       }).toString(),
+      // Never follow a redirect: it would resend the client secret.
+      redirect: 'manual',
       signal: AbortSignal.timeout(this.timeoutMs),
     });
+    assertNotRedirect(response, 'POST', `${this.identityBaseUrl}/connect/token`);
     const payload = (await readResponseBody(response)) as
       | { access_token?: string; expires_in?: number }
       | string
@@ -170,8 +175,11 @@ export class CorpayClient {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
+      // Never follow a redirect: the bearer token must only reach the API host.
+      redirect: 'manual',
       signal: AbortSignal.timeout(this.timeoutMs),
     });
+    assertNotRedirect(response, method, url);
 
     const payload = await readResponseBody(response);
     if (!response.ok) {
@@ -253,10 +261,28 @@ function scopeBodyTeam(value: unknown, team: string): unknown {
   return out;
 }
 
+/** Error bodies are read up to this many bytes; the rest is discarded. */
+const MAX_ERROR_BODY_BYTES = 64 * 1024;
+
+function assertNotRedirect(response: Response, method: HttpMethod, url: string): void {
+  if (response.status < 300 || response.status >= 400) return;
+  void response.body?.cancel().catch(() => undefined);
+  throw new CorpayHttpError({
+    status: response.status,
+    method,
+    url,
+    payload: null,
+    fallbackMessage: 'redirect not followed (check CORPAYONE_API_BASE_URL / CORPAYONE_IDENTITY_BASE_URL)',
+  });
+}
+
 async function readResponseBody(response: Response): Promise<unknown> {
   if (response.status === 204) return null;
-  const text = await response.text();
+  const { text, truncated } = response.ok
+    ? { text: await response.text(), truncated: false }
+    : await readTextUpTo(response, MAX_ERROR_BODY_BYTES);
   if (!text) return null;
+  if (truncated) return `${text}... [truncated]`;
   const contentType = response.headers.get('content-type') ?? '';
   if (!contentType.includes('application/json')) return text;
   try {
@@ -264,6 +290,28 @@ async function readResponseBody(response: Response): Promise<unknown> {
   } catch {
     return text;
   }
+}
+
+/** Reads at most `limit` bytes of the body as text and cancels the rest. */
+async function readTextUpTo(response: Response, limit: number): Promise<{ text: string; truncated: boolean }> {
+  if (!response.body) return { text: '', truncated: false };
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  let truncated = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (total + value.byteLength > limit) {
+      chunks.push(value.subarray(0, limit - total));
+      truncated = true;
+      await reader.cancel().catch(() => undefined);
+      break;
+    }
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  return { text: Buffer.concat(chunks).toString('utf8'), truncated };
 }
 
 function appendQuery(urlValue: string, query?: Record<string, QueryValue>): string {
