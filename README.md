@@ -8,6 +8,8 @@ Reads work out of the box. Every write is refused unless the server is
 configured to allow it, and each one goes through a prepare/commit ceremony so a
 change is reviewed before it happens.
 
+This is an independent, unofficial project. It is not developed, endorsed or supported by Corpay.
+
 ## What it can do
 
 **Read** — expenses (bills, receipts, credit notes) with their state, vendor,
@@ -175,11 +177,47 @@ docker run --rm -p 3000:3000 --env-file corpayone.env \
   ghcr.io/borgels/mcp-server-corpayone:latest
 ```
 
-The HTTP transport binds to loopback by default and expects to sit behind a
-reverse proxy that terminates TLS and authenticates callers. `MCP_HTTP_TOKEN`
-adds a bearer check (compared in constant time); `MCP_ALLOWED_ORIGINS`
-restricts browser origins. If any `*_TRUST_FORWARDED_USER` variable is `true`,
-the HTTP transport refuses to start without `MCP_HTTP_TOKEN`.
+The container binds `0.0.0.0`, so it needs `MCP_HTTP_TOKEN` (at least 32
+characters); callers send it as `Authorization: Bearer <token>`. The token is
+compared in constant time. If any `*_TRUST_FORWARDED_USER` variable is `true`,
+the HTTP transport also refuses to start without `MCP_HTTP_TOKEN` on loopback.
+
+### HTTP transport settings
+
+The HTTP transport serves `POST /mcp` (stateless Streamable HTTP) and an
+unauthenticated `GET /healthz`. It binds to `127.0.0.1` unless told otherwise.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `MCP_HTTP_HOST` / `HOST` | `127.0.0.1` | Bind address. |
+| `PORT` | `3000` | Listen port (1-65535). |
+| `MCP_HTTP_TOKEN` | – | Bearer token for `/mcp`: at least 32 printable ASCII characters, e.g. `openssl rand -hex 32`. **Required** on a non-loopback bind and with `MCP_ALLOW_ANY_ORIGIN=true`; the server refuses to start otherwise. |
+| `MCP_HTTP_ALLOW_UNAUTHENTICATED` | `false` | Start without a token where one would be required. Only for setups where access is restricted by other means; logs a warning. |
+| `MCP_ALLOWED_ORIGINS` | – | Comma-separated browser origins allowed to call `/mcp`. Default: localhost origins. Requests without an `Origin` header (server-to-server) are not affected. |
+| `MCP_ALLOW_ANY_ORIGIN` | `false` | Allow any browser origin. Requires `MCP_HTTP_TOKEN`. |
+| `MCP_ALLOWED_HOSTS` | – | Comma-separated host names accepted in the `Host` header. Default: on a loopback bind only `localhost`, `127.0.0.1`, `[::1]` and the bind address; no check on other binds. |
+| `MCP_MAX_BODY_BYTES` | `10485760` | Request body limit; larger requests get 413. |
+| `MCP_AUTH_FAILURE_LIMIT` | `20` | Failed authentication attempts per client address within the window before further failures get 429. `0` disables. Requests with a valid token are never throttled. |
+| `MCP_AUTH_FAILURE_WINDOW_MS` | `60000` | Window for `MCP_AUTH_FAILURE_LIMIT`. |
+
+Invalid values (a non-numeric `PORT`, a misspelt boolean) stop the server at
+startup with a message naming the variable. Rejected requests get a JSON error
+(401 with `WWW-Authenticate: Bearer`, 400 for invalid JSON, 413 for oversized
+bodies) and one log line on stderr. The server shuts down gracefully on
+SIGTERM/SIGINT.
+
+## Security model
+
+- The server acts with one shared Corpay One identity: the credentials in its
+  environment. Everyone who can call it acts with the same rights.
+- `MCP_HTTP_TOKEN` decides who may call the server at all. It does not tell
+  users apart. Per-user authorization belongs in an identity-aware gateway in
+  front of the server.
+- Tool access is not data access. Disabling or hiding tools limits what a
+  client can call, but the upstream credentials decide what data the server can
+  reach. Scope those credentials as narrowly as the use case allows.
+- The HTTP server does not terminate TLS. Run it behind a reverse proxy that
+  does, or keep it on a private network.
 
 ## Verifying a deployment
 
