@@ -117,6 +117,8 @@ async function exchange(code: string): Promise<void> {
       redirect_uri: redirectUri,
       code_verifier: pkce.verifier,
     }).toString(),
+    // The request carries the client secret; never resend it to a redirect target.
+    redirect: 'error',
   });
   const data = (await response.json()) as { refresh_token?: string; access_token?: string };
   if (!response.ok || !data.refresh_token) {
@@ -130,6 +132,7 @@ async function exchange(code: string): Promise<void> {
   try {
     const teamsRes = await fetch(`${apiBase}/v1/teams`, {
       headers: { Authorization: `Bearer ${data.access_token}`, Accept: 'application/json' },
+      redirect: 'error',
     });
     const teams = (await teamsRes.json()) as unknown;
     const ids = extractTeamIds(teams);

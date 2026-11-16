@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { CorpayClient } from './corpay/client.js';
 import { registerCorpayTools } from './tools/corpay.js';
 import { isTeamPinned } from './corpay/team.js';
+import { PACKAGE_VERSION } from './version.js';
 
 export interface CreateServerOptions {
   client?: CorpayClient;
@@ -37,7 +38,7 @@ specific expense to be approved.${
 /** Build an MCP server instance with the Corpay One tools registered. */
 export function createServer(options: CreateServerOptions = {}): McpServer {
   const server = new McpServer(
-    { name: 'mcp-server-corpayone', version: '1.0.0' },
+    { name: 'mcp-server-corpayone', version: PACKAGE_VERSION },
     { instructions: INSTRUCTIONS },
   );
   const client = options.client ?? new CorpayClient();
