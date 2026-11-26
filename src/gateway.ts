@@ -7,7 +7,7 @@ import { redactDeep, redactText } from './redaction.js';
 import { writeGatewayAuditEvent } from './corpay/gateway-audit.js';
 import { basicCredentials, CorpayGatewayClient, type CorpayEnvironment } from './corpay/gateway-client.js';
 import { failureMetadata, vendorRequestId, type FailureMetadata } from './corpay/gateway-errors.js';
-import { GATEWAY_TOOLS, type GatewayTool } from './corpay/gateway-tools.js';
+import { GATEWAY_TOOLS, type GatewayClientView, type GatewayTool } from './corpay/gateway-tools.js';
 import {
   canonicalToolName,
   currentInstancePolicy,
@@ -380,12 +380,17 @@ function policyDenial(name: string, tool: GatewayTool): string | undefined {
   return undefined;
 }
 
-/** A view of the client that can only read: a read tool that tries to change something is refused. */
-function readOnly(client: CorpayGatewayClient, tool: string): CorpayGatewayClient {
-  const refuse = async () => {
-    throw new Error(`Read tool ${tool} attempted a change in Corpay One; refused.`);
+/**
+ * A view of the client that can only read: a read tool that tries to change something is refused. It delegates to the
+ * client itself, so the access and a renewed token are shared with every other call of the instance.
+ */
+function readOnly(client: CorpayGatewayClient, tool: string): GatewayClientView {
+  return {
+    get: (path, query) => client.get(path, query),
+    send: async () => {
+      throw new Error(`Read tool ${tool} attempted a change in Corpay One; refused.`);
+    },
   };
-  return Object.assign(Object.create(client) as CorpayGatewayClient, { send: refuse });
 }
 
 const UNKNOWN_TOOL = 'unknown_tool';

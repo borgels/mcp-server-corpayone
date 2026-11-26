@@ -246,3 +246,46 @@ describe('calls', () => {
     expect(JSON.stringify(found.structuredContent)).not.toContain('corpay_approve_expense');
   });
 });
+
+describe('renewal', () => {
+  it('renews once for sequential and concurrent reads, and uses the rotated token from then on', async () => {
+    const grants: string[] = [];
+    let n = 0;
+    const { impl } = stub({ 'GET /external/v1/teams': { data: { teams: [] } }, 'GET /external/v2/expenses': { data: {} } }, () => {
+      n += 1;
+      return json({ access_token: `access-token-value-${n}-1234567890`, expires_in: 3600, refresh_token: n === 1 ? NEW_REFRESH : `Rq${n}cV6bN9mQ2wE5rT8yU1iO4pA7sD0fG` });
+    });
+    const wrapped = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/connect/token')) grants.push(new URLSearchParams(String(init?.body)).get('refresh_token') ?? '');
+      return impl(url, init);
+    }) as typeof fetch;
+    const gw = gateway(wrapped, { onRefreshToken: () => undefined });
+    await Promise.all([gw.callTool('check_connection', {}), gw.callTool('list_expenses', {})]);
+    await gw.callTool('check_connection', {});
+    await gw.callTool('list_expenses', {});
+    expect(grants).toEqual([REFRESH]);
+  });
+
+  it('sends nothing more from an instance whose renewed token the host could not keep', async () => {
+    const { impl, calls } = stub(
+      { 'POST /external/v2/teams/team-own/vendors': { data: {} } },
+      () => json({ access_token: 'access-token-value-1234567890', refresh_token: NEW_REFRESH }),
+    );
+    let failures = 0;
+    const gw = gateway(impl, { onRefreshToken: () => ((failures += 1), Promise.reject(new Error('disk full'))) });
+    expect((await gw.callTool('create_vendor', { name: 'A' })).isError).toBe(true);
+    expect((await gw.callTool('create_vendor', { name: 'A' })).isError).toBe(true);
+    expect(failures).toBe(1);
+    expect(calls.filter(call => call.method === 'POST' && call.url.includes('/external/'))).toHaveLength(0);
+  });
+
+  it('stops instead of using an issued token that shares a piece with a fixed output', async () => {
+    const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () =>
+      json({ access_token: 'Withheldxq7pX2vK9mWb4TnR8yLc', expires_in: 3600 }),
+    );
+    const result = await gateway(impl).callTool('check_connection', {});
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('Withheld');
+    expect(calls.some(call => call.url.includes('/external/'))).toBe(false);
+  });
+});

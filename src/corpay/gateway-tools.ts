@@ -1,5 +1,11 @@
 import { z } from 'zod/v4';
-import type { CorpayGatewayClient, GatewayQueryValue } from './gateway-client.js';
+import type { GatewayQueryValue, GatewayWriteMethod } from './gateway-client.js';
+
+/** What a tool may use of the client: reads, and (for a write tool) changes. */
+export interface GatewayClientView {
+  get<T>(path: string, query?: Record<string, GatewayQueryValue>): Promise<T>;
+  send<T>(method: GatewayWriteMethod, path: string, body?: unknown, contentType?: string): Promise<T>;
+}
 
 /**
  * The tools of the embedded gateway (src/gateway.ts): narrow inputs, one
@@ -49,7 +55,7 @@ export interface GatewayTool {
   upstream: readonly GatewayUpstream[];
   broad?: boolean;
   input: z.ZodRawShape;
-  run(client: CorpayGatewayClient, input: Record<string, unknown>, context: ToolContext): Promise<unknown>;
+  run(client: GatewayClientView, input: Record<string, unknown>, context: ToolContext): Promise<unknown>;
 }
 
 /** Thrown when a resource addressed by id is not the instance's team's, or its team cannot be read. */
@@ -127,7 +133,7 @@ export function teamOf(payload: unknown): string | undefined {
 }
 
 /** Reads an expense and refuses it unless it belongs to the instance's team. */
-async function expenseInTeam(client: CorpayGatewayClient, expenseId: string, teamId: string): Promise<Record<string, unknown>> {
+async function expenseInTeam(client: GatewayClientView, expenseId: string, teamId: string): Promise<Record<string, unknown>> {
   const payload = await client.get<unknown>(`/v3/expenses/${encodeURIComponent(expenseId)}`);
   const team = teamOf(payload);
   if (team === undefined) throw new TeamBoundaryError('The team of the expense could not be read; nothing was done with it.');

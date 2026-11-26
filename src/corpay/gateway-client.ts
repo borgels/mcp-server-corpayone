@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto';
+import { fixedOutputs } from '../fallbacks.js';
 import type { SecretRedactor } from '../gateway-redactor.js';
+import { leaksSecret } from '../key-admission.js';
 import { CorpayAnswerError, requestIdFrom } from './gateway-errors.js';
 
 /**
@@ -104,6 +106,8 @@ export class CorpayGatewayClient {
   private readonly onRefreshToken?: (refreshToken: string) => void | Promise<void>;
   private access?: { token: string; expiresAt: number };
   private pending?: Promise<string>;
+  /** Set when a renewed token could not be kept, or cannot be kept safely: nothing more is sent from this client. */
+  private stopped = false;
   readonly timeoutMs: number;
 
   constructor(options: CorpayGatewayClientOptions) {
@@ -131,6 +135,7 @@ export class CorpayGatewayClient {
 
   /** A valid access token: renewed with the refresh token when needed, one renewal at a time. */
   accessToken(): Promise<string> {
+    if (this.stopped) return Promise.reject(new Error(STOPPED));
     if (this.access && Date.now() < this.access.expiresAt - 60_000) return Promise.resolve(this.access.token);
     this.pending ??= this.renew().finally(() => {
       this.pending = undefined;
@@ -152,6 +157,18 @@ export class CorpayGatewayClient {
       url.searchParams.set(key, String(value));
     }
     return url.toString();
+  }
+
+  /**
+   * Registers a token Corpay One issued with the instance's redactor. A token that shares a piece with one of the fixed
+   * outputs (src/fallbacks.ts) could not be kept out of them, so the client stops instead of using it.
+   */
+  private admitIssued(token: string): void {
+    this.redactor.addSecret(token);
+    if (leaksSecret(fixedOutputs(), this.redactor)) {
+      this.stopped = true;
+      throw new Error(UNSAFE_TOKEN);
+    }
   }
 
   private async renew(): Promise<string> {
@@ -194,16 +211,19 @@ export class CorpayGatewayClient {
     if (typeof token !== 'string' || !/^[\x21-\x7e]{16,8192}$/.test(token)) {
       throw new Error("Corpay One's identity service answered without a usable access token; nothing of it is passed on.");
     }
-    this.redactor.addSecret(token);
+    this.admitIssued(token);
     const next = answer?.refresh_token;
     if (typeof next === 'string' && next !== this.refreshToken && /^[\x21-\x7e]{16,8192}$/.test(next)) {
-      this.redactor.addSecret(next);
+      this.admitIssued(next);
+      // Corpay One may already have retired the old token. Until the host has kept the new one, nothing else is sent;
+      // if it cannot, this client sends nothing more at all (a new instance starts from what the host has kept).
       this.refreshToken = next;
       if (this.onRefreshToken) {
         try {
           await this.onRefreshToken(next);
         } catch {
-          throw new Error('The renewed refresh token could not be kept by the host; nothing was sent to Corpay One.');
+          this.stopped = true;
+          throw new Error(NOT_KEPT);
         }
       }
     }
@@ -219,6 +239,7 @@ export class CorpayGatewayClient {
     body?: unknown,
     contentType = 'application/json',
   ): Promise<T> {
+    if (this.stopped) throw new Error(STOPPED);
     const url = this.buildUrl(path, query);
     const token = await this.accessToken();
     const headers: Record<string, string> = { Accept: 'application/json', Authorization: `Bearer ${token}` };
@@ -275,6 +296,10 @@ export class CorpayGatewayClient {
     return new Error(`Network error calling Corpay One (${method})${shown ? ` (${shown})` : ''}.`);
   }
 }
+
+const NOT_KEPT = 'The renewed refresh token could not be kept by the host; nothing more is sent to Corpay One from this instance.';
+const UNSAFE_TOKEN = "Corpay One issued a token that cannot be kept apart from this server's own texts; nothing more is sent from this instance. Try again.";
+const STOPPED = 'Nothing more is sent to Corpay One from this instance: a renewed token could not be kept. Create a new instance from the kept token.';
 
 /** The Basic credentials made from the app's id and secret; a secret itself. */
 export function basicCredentials(clientId: string, clientSecret: string): string {
