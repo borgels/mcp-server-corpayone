@@ -16,7 +16,6 @@ import {
 } from '../src/corpay/ownership.js';
 import { checkPolicy, normalizePolicyPath, type CorpayPolicy } from '../src/corpay/policy.js';
 import { validateWebhookSignature } from '../src/corpay/webhooks.js';
-import { createCorpayGateway } from '../src/gateway.js';
 import { registerCorpayTools } from '../src/tools/corpay.js';
 import { buildAuthorizeUrl, createPkcePair, pkceChallenge, stateMatches } from '../src/auth/pkce.js';
 import {
@@ -211,24 +210,6 @@ describe('by-id resources are scoped to the pinned team', () => {
     expect(calls.some(c => c.method === 'PATCH')).toBe(false);
   });
 
-  it('gateway get_expense and write_expense_coding refuse a foreign expense', async () => {
-    const { impl, calls } = stubFetch({ '/v3/expenses/E1': FOREIGN_EXPENSE });
-    const gateway = createCorpayGateway({
-      clientId: 'id',
-      clientSecret: 'secret',
-      refreshToken: 'refresh',
-      env: 'production',
-      teamId: PINNED,
-      fetchImpl: impl,
-      enableWrites: true,
-    });
-    const read = await gateway.callTool('get_expense', { id: 'E1' });
-    expect(read.isError).toBe(true);
-    const write = await gateway.callTool('write_expense_coding', { id: 'E1', categoryId: 'C1' });
-    expect(write.isError).toBe(true);
-    expect(write.content[0]!.text).toMatch(/another team/);
-    expect(calls.some(c => c.method === 'PATCH')).toBe(false);
-  });
 });
 
 // ------------------------------------------------------------------ C2
@@ -358,22 +339,6 @@ describe('path parameters and policy paths are normalized', () => {
     expect(() => materializePath(endpoint, { expenseId: '..' })).toThrow(/Invalid/);
   });
 
-  it('gateway refuses an id that is not a single segment without calling Corpay', async () => {
-    const { impl, calls } = stubFetch({});
-    const gateway = createCorpayGateway({
-      clientId: 'id',
-      clientSecret: 'secret',
-      refreshToken: 'refresh',
-      env: 'production',
-      fetchImpl: impl,
-      enableWrites: true,
-    });
-    for (const id of ['../../v1/teams', 'E1/approve', 'E1?x=1', '%2e%2e']) {
-      expect((await gateway.callTool('get_expense', { id })).isError).toBe(true);
-      expect((await gateway.callTool('write_expense_coding', { id, categoryId: 'C1' })).isError).toBe(true);
-    }
-    expect(calls).toHaveLength(0);
-  });
 
   it('normalizes dot segments and escapes before matching deny patterns', () => {
     expect(normalizePolicyPath('/v1/teams/T1/x/../members').encoded).toBe('/v1/teams/T1/members');

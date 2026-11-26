@@ -1,8 +1,24 @@
-import { CorpayClient, type QueryValue } from './corpay/client.js';
-import { checkPolicy, loadPolicy } from './corpay/policy.js';
-import { encodePathSegment } from './corpay/catalog.js';
-import { fetchResourceInTeam } from './corpay/ownership.js';
-import { formatUnknownError } from './errors.js';
+import { randomUUID } from 'node:crypto';
+import { z } from 'zod/v4';
+import { fixedOutputs, withheldResult } from './fallbacks.js';
+import { SecretRedactor } from './gateway-redactor.js';
+import { admitsKey, KEY_REFUSED, leaksSecret, maskedText, sealedError } from './key-admission.js';
+import { redactDeep, redactText } from './redaction.js';
+import { writeGatewayAuditEvent } from './corpay/gateway-audit.js';
+import { basicCredentials, CorpayGatewayClient, type CorpayEnvironment } from './corpay/gateway-client.js';
+import { failureMetadata, vendorRequestId, type FailureMetadata } from './corpay/gateway-errors.js';
+import { GATEWAY_TOOLS, type GatewayTool } from './corpay/gateway-tools.js';
+import {
+  canonicalToolName,
+  currentInstancePolicy,
+  GatewayConfigError,
+  resolveInstancePolicy,
+  runInCallScope,
+  TOOL_PREFIX,
+  type CallContext,
+  type InstancePolicy,
+  type ResolvedInstancePolicy,
+} from './corpay/gateway-scope.js';
 
 // Re-exported so an embedding host can validate inbound Corpay One
 // webhooks and filter event types without reaching into package internals.
@@ -10,23 +26,44 @@ export { validateWebhookSignature } from './corpay/webhooks.js';
 export { WEBHOOK_EVENTS } from './corpay/catalog.js';
 
 /**
- * Gateway contract for Corpay One.
+ * Embeddable entry point (package export `./gateway`): an embedding host,
+ * such as an MCP gateway that does its own per-user authorization, lists
+ * `tools` and invokes `callTool`. The tools, their inputs and how their
+ * answers are scrubbed live in src/corpay/gateway-tools.ts.
  *
- * A plain export for embedding hosts that wrap Corpay One as a provider
- * without copying connector logic: stable, unprefixed tool definitions (`riskLevel`/`enabledByDefault`) and
- * a `callTool` returning a `GatewayToolResult`. Reads are enabled by default; the
- * coding write is disabled by default and gated by the connector's write policy.
+ * One instance per company (Corpay One team). Several instances can run in
+ * one process. Each instance uses only what the host passes: the app's
+ * client id and secret, the company's refresh token and the team id. It
+ * reads no CORPAYONE_* variable at all (not the credentials, not the team,
+ * not the environment or the addresses, not the write or approval switches,
+ * not the policy file, not the audit log). Redirects are never followed.
+ *
+ * The team is a hard boundary: every list is asked for that team, and a
+ * resource addressed by id (an expense) is read first and refused unless it
+ * belongs to the team.
+ *
+ * When Corpay One renews the access with a new refresh token, the instance
+ * uses it at once and gives it to the host (`onRefreshToken`) before it sends
+ * anything else.
+ *
+ * Changes are sent directly when the host's policy enables writes: there is
+ * no prepare and commit step here, since the host decides who may change what
+ * and records a change before it is sent. Approving an expense is marked
+ * `requiresConfirmation` in the catalog, because it releases the bill for
+ * payment; whether a person confirms it, and how, is the host's decision.
+ *
+ * Every call runs in a call scope of its own (AsyncLocalStorage), so a call
+ * made from inside another instance's call never inherits that instance's
+ * policy, sink, redactor or caller.
  */
+
+export type { AuditSink, InstancePolicy } from './corpay/gateway-scope.js';
+export { GatewayConfigError } from './corpay/gateway-scope.js';
+export { KEY_REFUSED } from './key-admission.js';
+export { CORPAY_ORIGINS, type CorpayEnvironment } from './corpay/gateway-client.js';
+
 export type GatewayRiskLevel = 'read' | 'write' | 'destructive';
-// Plain JSON types, so an embedding host can use its own structurally
-// compatible connector typing.
-export type GatewayJsonValue =
-  | string
-  | number
-  | boolean
-  | null
-  | GatewayJsonValue[]
-  | { [key: string]: GatewayJsonValue };
+export type GatewayJsonValue = string | number | boolean | null | GatewayJsonValue[] | { [key: string]: GatewayJsonValue };
 export type GatewayJsonObject = { [key: string]: GatewayJsonValue };
 
 export interface GatewayToolDefinition {
@@ -38,393 +75,340 @@ export interface GatewayToolDefinition {
   inputSchema: GatewayJsonObject;
 }
 
+/**
+ * Metadata about a failed call, on an error result whose cause is known: the HTTP status Corpay One answered with,
+ * and its request id when a response header gives one as a UUID or hex id. Never the response body, Corpay's error
+ * code or message, or the input.
+ */
+export type GatewayFailure = FailureMetadata;
+
 export interface GatewayToolResult {
   content: Array<{ type: 'text'; text: string }>;
   structuredContent?: GatewayJsonValue;
   isError?: boolean;
+  /** On an error result from Corpay One only: its HTTP status and request id (see GatewayFailure). */
+  failure?: GatewayFailure;
 }
 
-export const corpayGatewayTools: GatewayToolDefinition[] = [
-  {
-    name: 'check_connection',
-    title: 'Check Corpay One connection',
-    description: 'Validate OAuth credentials and list accessible teams.',
-    riskLevel: 'read',
-    enabledByDefault: true,
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-  },
-  {
-    name: 'list_expenses',
-    title: 'List expenses',
-    description: 'List expenses (bills/documents), filterable by status (e.g. pending approval).',
-    riskLevel: 'read',
-    enabledByDefault: true,
-    inputSchema: {
-      type: 'object',
-      properties: { status: { type: 'string' }, limit: { type: 'number' } },
-      additionalProperties: true,
-    },
-  },
-  {
-    name: 'get_expense',
-    title: 'Get expense',
-    description: 'Read one expense including vendor, amounts, line items, and coding.',
-    riskLevel: 'read',
-    enabledByDefault: true,
-    inputSchema: {
-      type: 'object',
-      properties: { id: { type: ['string', 'number'] } },
-      required: ['id'],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: 'list_categories',
-    title: 'List categories',
-    description:
-      'List the team’s coding categories (GL accounts) with their Corpay category id, number, and name — the writable coding options.',
-    riskLevel: 'read',
-    enabledByDefault: true,
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-  },
-  {
-    name: 'list_coding_options',
-    title: 'List coding options',
-    description:
-      'List every writable coding option for expenses in one call: categories (GL accounts) with their Corpay id + GL number, and label lists (e.g. project, cost type) with each label’s Corpay id and externalId (the source-system number). These ids are what write_expense_coding consumes.',
-    riskLevel: 'read',
-    enabledByDefault: true,
-    inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-  },
-  {
-    name: 'write_expense_coding',
-    title: 'Write expense coding',
-    description:
-      'Set an expense’s coding via RFC 6902 JSON Patch: categoryId (the Corpay category id from list_categories), labelIds, and departmentIds. Write — disabled by default; enable via the gateway’s enableWrites option or the CORPAYONE_ENABLE_WRITES env flag.',
-    riskLevel: 'write',
-    enabledByDefault: false,
-    inputSchema: {
-      type: 'object',
-      properties: {
-        id: { type: ['string', 'number'] },
-        categoryId: { type: ['string', 'null'] },
-        labelIds: { type: 'array', items: { type: 'string' } },
-        departmentIds: { type: 'array', items: { type: 'string' } },
-        idempotencyKey: { type: 'string' },
-      },
-      required: ['id'],
-      additionalProperties: false,
-    },
-  },
-];
+/** Who and which request a call belongs to; written to the audit records of the call. */
+export type GatewayCallContext = CallContext;
 
-// Minimal upstream shapes used when assembling list_coding_options. Kept local
-// to the gateway; the tool returns these straight through as GatewayJsonValue.
-interface CorpayCategory {
-  id: string;
-  number?: string;
-  name?: string;
+/** Deeply read-only JSON, as found in the frozen tool catalog. */
+export type GatewayReadonlyJsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | readonly GatewayReadonlyJsonValue[]
+  | { readonly [key: string]: GatewayReadonlyJsonValue };
+
+/** One Corpay One API request a tool may make: the method and the path template under /external. */
+export interface GatewayUpstreamOperation {
+  readonly method: 'GET' | 'POST' | 'PUT' | 'PATCH';
+  readonly path: string;
 }
-interface CorpayListSummary {
-  id: string;
-  name?: string;
-  type?: string;
-}
-interface CorpayLabel {
-  id: string;
-  externalId?: string | null;
-  value?: string | null;
+
+/** A tool catalog entry: the gateway definition plus the upstream requests the tool may make. */
+export interface GatewayToolCatalogEntry {
+  readonly name: string;
+  readonly title: string;
+  readonly description: string;
+  readonly riskLevel: GatewayRiskLevel;
+  readonly enabledByDefault: boolean;
+  readonly inputSchema: { readonly [key: string]: GatewayReadonlyJsonValue };
+  /** Every Corpay One request the tool may make. Empty for a tool that does not call Corpay One. */
+  readonly upstream: readonly GatewayUpstreamOperation[];
+  /** True when the tool can read more than its name says. No Corpay One gateway tool is broad. */
+  readonly broad: boolean;
+  /**
+   * True for a change a person should confirm outside the chat before it runs: approving an expense, which releases
+   * the bill for payment. False for every other tool.
+   */
+  readonly requiresConfirmation: boolean;
 }
 
 export interface CorpayGatewayOptions {
-  clientId?: string;
-  clientSecret?: string;
-  refreshToken?: string;
-  teamId?: string;
-  env?: 'staging' | 'production';
+  /** The app's client id at Corpay One (from app.corpayone.com/developers). Required; not a secret. */
+  clientId: string;
+  /** The app's client secret. Required; a secret. */
+  clientSecret: string;
+  /** The refresh token the company's consent gave (offline_access). Required; a secret. */
+  refreshToken: string;
+  /** The Corpay One team (company) this instance acts for: a hard boundary. Required. */
+  teamId: string;
+  /** Which Corpay One to talk to. Default production; addresses are fixed per environment. */
+  environment?: CorpayEnvironment;
+  /**
+   * Called with a new refresh token when Corpay One hands one out while renewing the access. The instance uses it
+   * from then on; a host that stores tokens saves it here. The call waits for it, and a rejection stops the call
+   * before anything is sent.
+   */
+  onRefreshToken?: (refreshToken: string) => void | Promise<void>;
+  /** The fetch to use (tests, or a host's own). Redirects are never followed either way. */
   fetchImpl?: typeof fetch;
+  /** Time limit per request in milliseconds. Default 30 seconds; never read from the environment. */
   timeoutMs?: number;
   /**
-   * Enable coding writes for this gateway instance. An embedding host that wraps
-   * the gateway and applies its own write governance (scopes, approvals, audit)
-   * passes `true` to opt in, instead of relying on the CORPAYONE_ENABLE_WRITES
-   * environment flag used by the standalone server. Defaults to the env flag.
+   * Instance policy from the host. Without it the instance uses the default policy (no writes, no disabled tools,
+   * no audit records); it never reads a policy or audit variable from the environment.
    */
-  enableWrites?: boolean;
-  /** Deterministic, no-network fixture mode for review/demo automation. */
-  contractMode?: boolean;
+  policy?: InstancePolicy;
 }
 
-export interface CorpayGateway {
-  tools: GatewayToolDefinition[];
-  callTool(name: string, args?: GatewayJsonObject): Promise<GatewayToolResult>;
-}
-
-export function createCorpayGateway(options: CorpayGatewayOptions = {}): CorpayGateway {
-  if (options.contractMode) {
-    return { tools: corpayGatewayTools, callTool: (name, args = {}) => Promise.resolve(contractToolResult(name, args)) };
-  }
-  const client = new CorpayClient({
-    clientId: options.clientId,
-    clientSecret: options.clientSecret,
-    refreshToken: options.refreshToken,
-    teamId: options.teamId,
-    env: options.env,
-    fetchImpl: options.fetchImpl,
-    timeoutMs: options.timeoutMs,
-  });
-  const teamId = options.teamId ?? process.env.CORPAYONE_TEAM_ID ?? '';
-  // Writes are permitted when the embedder opts in via `enableWrites` or the
-  // standalone CORPAYONE_ENABLE_WRITES env flag; the rest of the write policy
-  // (allowed methods/paths/amount) still applies on top.
-  const writePolicy = options.enableWrites ? { ...loadPolicy(), writesEnabled: true } : loadPolicy();
-  return {
-    tools: corpayGatewayTools,
-    async callTool(name, args = {}) {
-      try {
-        switch (name) {
-          case 'check_connection': {
-            await client.getAccessToken();
-            return jsonResult('Corpay One credentials are valid (OAuth token acquired).', { ok: true });
-          }
-          case 'list_expenses':
-            return jsonResult(
-              'Listed Corpay One expenses.',
-              await client.request({ method: 'GET', path: '/v2/expenses', query: toQuery(args) }),
-            );
-          case 'get_expense':
-            return jsonResult(
-              'Fetched Corpay One expense.',
-              await fetchResourceInTeam(client, 'expense', expenseIdArg(args)),
-            );
-          case 'list_categories': {
-            // Categories (GL accounts) with their Corpay id/number/name — the
-            // writable coding options. Requires the teams.categories scope.
-            const data = await client.request<{ data?: { categories?: unknown } }>({
-              method: 'GET',
-              path: `/v1/teams/${encodePathSegment(teamId, 'teamId')}/categories`,
-              withTeamId: false,
-            });
-            return jsonResult('Listed Corpay One categories.', { categories: data?.data?.categories ?? [] });
-          }
-          case 'list_coding_options': {
-            // One call returns everything writable: categories (GL accounts) plus
-            // each label list (project, cost type, …) with its labels. Label/category
-            // ids are what write_expense_coding consumes; externalId carries the
-            // source-system number so callers can resolve by GL/project number.
-            const [catData, listsData] = await Promise.all([
-              client.request<{ data?: { categories?: CorpayCategory[] } }>({
-                method: 'GET',
-                path: `/v1/teams/${encodePathSegment(teamId, 'teamId')}/categories`,
-                withTeamId: false,
-              }),
-              client.request<{ data?: { lists?: CorpayListSummary[] } }>({
-                method: 'GET',
-                path: `/v1/teams/${encodePathSegment(teamId, 'teamId')}/lists`,
-                withTeamId: false,
-              }),
-            ]);
-            const summaries = listsData?.data?.lists ?? [];
-            const lists = await Promise.all(
-              summaries.map(async (summary) => {
-                const detail = await client.request<{ data?: { list?: { labels?: CorpayLabel[] } } }>({
-                  method: 'GET',
-                  path: `/v1/teams/${encodePathSegment(teamId, 'teamId')}/lists/${encodePathSegment(summary.id, 'listId')}`,
-                  withTeamId: false,
-                });
-                const labels = (detail?.data?.list?.labels ?? []).map((label) => ({
-                  id: label.id,
-                  externalId: label.externalId ?? null,
-                  value: label.value ?? null,
-                }));
-                return { id: summary.id, name: summary.name ?? null, type: summary.type ?? null, labels };
-              }),
-            );
-            return jsonResult('Listed Corpay One coding options.', {
-              categories: catData?.data?.categories ?? [],
-              lists,
-            });
-          }
-          case 'write_expense_coding': {
-            // Coding is written via RFC 6902 JSON Patch. categoryId is the Corpay
-            // category id (from list_categories), not the GL number.
-            const expensePath = `/v2/expenses/${encodePathSegment(expenseIdArg(args), 'id')}`;
-            const decision = checkPolicy(
-              {
-                capability: 'corpay_write_expense_coding',
-                method: 'PATCH',
-                path: expensePath,
-                pathTemplate: '/v2/expenses/{expenseId}',
-              },
-              writePolicy,
-            );
-            if (!decision.allowed) return errorResult(`Blocked by policy: ${decision.reason}`);
-            // Pick add vs replace per field from the expense's current coding:
-            // Corpay 500s on `add` to an already-set scalar (e.g. its
-            // auto-assigned category) and requires `replace`; an unset field
-            // requires `add`.
-            // Also verifies the expense belongs to the pinned team.
-            const detail = await fetchResourceInTeam<{
-              data?: { category?: unknown; labels?: unknown[]; departments?: unknown[] };
-            }>(client, 'expense', expenseIdArg(args));
-            const cur = detail?.data ?? {};
-            const present: CodingPresence = {
-              hasCategory: isCodingPresent(cur.category),
-              hasLabels: Array.isArray(cur.labels) && cur.labels.length > 0,
-              hasDepartments: Array.isArray(cur.departments) && cur.departments.length > 0,
-            };
-            const ops = codingPatch(args, present);
-            if (ops.length === 0) return errorResult('No coding fields supplied.');
-            const result = await client.request({
-              method: 'PATCH',
-              path: expensePath,
-              body: ops,
-              headers: { 'Content-Type': 'application/json-patch+json' },
-              idempotencyKey: typeof args.idempotencyKey === 'string' ? args.idempotencyKey : undefined,
-            });
-            return jsonResult('Updated Corpay One expense coding.', result ?? { ok: true });
-          }
-          default:
-            return errorResult(`Unsupported Corpay One gateway tool: ${name}`);
-        }
-      } catch (error) {
-        return errorResult(formatUnknownError(error));
-      }
+/**
+ * JSON Schema for a gateway tool, derived from the same zod schema the call is validated with. `format` and
+ * `pattern` are dropped: validators such as Ajv reject unknown formats in strict mode, and zod checks the values
+ * when the call runs.
+ */
+function toJsonSchema(schema: z.ZodType): GatewayJsonObject {
+  const { $schema: _ignored, ...json } = z.toJSONSchema(schema, {
+    io: 'input',
+    override: ctx => {
+      delete (ctx.jsonSchema as Record<string, unknown>).format;
+      delete (ctx.jsonSchema as Record<string, unknown>).pattern;
     },
+  }) as Record<string, unknown>;
+  return json as GatewayJsonObject;
+}
+
+function deepFreeze<T>(value: T): T {
+  if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+    for (const entry of Object.values(value)) deepFreeze(entry);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+/** Strict input schemas: an unknown field is refused, not dropped. */
+const SCHEMAS: ReadonlyMap<string, z.ZodType> = new Map(GATEWAY_TOOLS.map(tool => [`${TOOL_PREFIX}${tool.name}`, z.strictObject(tool.input)]));
+const BY_NAME: ReadonlyMap<string, GatewayTool> = new Map(GATEWAY_TOOLS.map(tool => [`${TOOL_PREFIX}${tool.name}`, tool]));
+const GATEWAY_TOOL_NAMES: readonly string[] = [...BY_NAME.keys()];
+
+function definition(tool: GatewayTool): GatewayToolDefinition {
+  return {
+    name: tool.name,
+    title: tool.title,
+    description: tool.description,
+    riskLevel: tool.riskLevel,
+    enabledByDefault: tool.riskLevel === 'read',
+    inputSchema: toJsonSchema(SCHEMAS.get(`${TOOL_PREFIX}${tool.name}`)!),
   };
 }
 
-function contractToolResult(name: string, args: GatewayJsonObject): GatewayToolResult {
-  switch (name) {
-    case 'check_connection':
-      return jsonResult('Corpay One credentials are valid (OAuth token acquired).', { ok: true });
-    case 'list_expenses':
-      return jsonResult('Listed Corpay One expenses.', {
-        items: [{ id: 'exp_1', state: 'booked', type: 'bill', amount: 1234.56 }],
-      });
-    case 'get_expense':
-      return jsonResult('Fetched Corpay One expense.', {
-        id: String(args.id ?? 'exp_1'),
-        state: 'booked',
-        type: 'bill',
-        amount: 1234.56,
-        category: null,
-        labels: [],
-        lines: [],
-      });
-    case 'list_categories':
-      return jsonResult('Listed Corpay One categories.', {
-        categories: [
-          { id: 'cat_1310', number: '1310', name: 'Direkte omkostninger m/moms' },
-          { id: 'cat_9900', number: '9900', name: 'Analyse/fejlkonto' },
-        ],
-      });
-    case 'list_coding_options':
-      return jsonResult('Listed Corpay One coding options.', {
-        categories: [
-          { id: 'cat_1310', number: '1310', name: 'Direkte omkostninger m/moms' },
-          { id: 'cat_9900', number: '9900', name: 'Analyse/fejlkonto' },
-        ],
-        lists: [
-          {
-            id: 'list_projects',
-            name: 'Projekter',
-            type: 'EconomicProjects',
-            labels: [{ id: 'lbl_p1', externalId: '1', value: '1 Demo project' }],
-          },
-          {
-            id: 'list_costtypes',
-            name: 'Omkostningstype',
-            type: 'EconomicCostNumbers',
-            labels: [{ id: 'lbl_c1', externalId: '1', value: '1 Materialer' }],
-          },
-        ],
-      });
-    case 'write_expense_coding':
-      return jsonResult('Updated Corpay One expense coding.', {
-        id: String(args.id ?? 'exp_1'),
-        updated: true,
-        patch: codingPatch(args),
-      });
-    default:
-      return errorResult(`Unsupported Corpay One gateway tool: ${name}`);
+/** All gateway tools, as definitions (names without the prefix). */
+export const corpayGatewayTools: GatewayToolDefinition[] = GATEWAY_TOOLS.map(definition);
+
+/**
+ * The tool catalog: every gateway tool with its definition, the upstream requests it may make, the broad mark and
+ * whether a person should confirm it. Deeply frozen; a host can build its permission model from it without creating
+ * an instance.
+ */
+export const corpayToolCatalog: readonly GatewayToolCatalogEntry[] = deepFreeze(
+  GATEWAY_TOOLS.map(tool => ({
+    ...definition(tool),
+    upstream: tool.upstream.map(operation => ({ ...operation })),
+    broad: tool.broad === true,
+    requiresConfirmation: tool.requiresConfirmation === true,
+  })),
+);
+
+/** KEY_REFUSED with every run that shares a piece with any of the secrets masked, so it holds no piece of one. */
+function refusedText(field: string, secrets: readonly unknown[]): string {
+  return secrets.reduce<string>((text, secret) => maskedText(text, secret), `${field}: ${KEY_REFUSED}`);
+}
+
+const ID_FORM = /^[A-Za-z0-9_-]{1,100}$/;
+const CLIENT_ID_FORM = /^[!-9;-~]{1,200}$/;
+
+function requiredSecret(options: Partial<CorpayGatewayOptions>, name: 'clientSecret' | 'refreshToken', given: readonly unknown[]): string {
+  const value: unknown = options[name];
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new GatewayConfigError(`createCorpayGateway requires options.${name}. Embedded instances do not read credentials from the environment.`);
+  }
+  // Key admission (src/key-admission.ts): printable ASCII of 16 characters or more, sharing no piece with any text of
+  // ours. Checked before anything is built from it; the refusal is a fixed text that holds no piece of it.
+  if (!admitsKey(value.trim())) throw new GatewayConfigError(refusedText(`options.${name}`, given));
+  return value.trim();
+}
+
+/** A caller id from the host: redacted before it is cut short, so no part of a secret survives. */
+function contextValue(value: unknown, redactor: SecretRedactor): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? redactor.redact(value.trim()).slice(0, 200) : undefined;
+}
+
+/**
+ * Create one gateway instance for one Corpay One team. `clientId`, `clientSecret`, `refreshToken` and `teamId` are
+ * required and are the only credentials the instance uses; a missing or refused value fails here, before anything is
+ * built or sent.
+ */
+export function createCorpayGateway(options: CorpayGatewayOptions) {
+  const raw = (options ?? {}) as Partial<CorpayGatewayOptions>;
+  const secrets = (['clientSecret', 'refreshToken'] as const).flatMap(name => {
+    const value: unknown = raw[name];
+    return typeof value === 'string' && value !== '' ? [value, value.trim()] : [];
+  });
+  const guard = new SecretRedactor();
+  try {
+    for (const form of secrets) guard.addSecret(form);
+    const clientSecret = requiredSecret(raw, 'clientSecret', secrets);
+    const refreshToken = requiredSecret(raw, 'refreshToken', secrets);
+    if (clientSecret === refreshToken) throw new GatewayConfigError(refusedText('options', secrets));
+    const clientId = typeof raw.clientId === 'string' ? raw.clientId.trim() : '';
+    if (!CLIENT_ID_FORM.test(clientId)) {
+      throw new GatewayConfigError('createCorpayGateway requires options.clientId. Embedded instances do not read credentials from the environment.');
+    }
+    const teamId = typeof raw.teamId === 'string' ? raw.teamId.trim() : '';
+    if (!ID_FORM.test(teamId)) {
+      throw new GatewayConfigError('createCorpayGateway requires options.teamId (a Corpay One team id). Embedded instances do not read it from the environment.');
+    }
+    const environment = raw.environment ?? 'production';
+    if (environment !== 'production' && environment !== 'staging') {
+      throw new GatewayConfigError('options.environment must be "production" or "staging".');
+    }
+    guard.addSecret(basicCredentials(clientId, clientSecret));
+    // The fixed outputs of the sink check (src/fallbacks.ts) must hold no piece of a secret.
+    if (leaksSecret(fixedOutputs(), guard)) throw new GatewayConfigError(refusedText('options', secrets));
+    const gateway = buildCorpayGateway(raw, { clientId, clientSecret, refreshToken, teamId, environment }, guard);
+    // The tool list leaves the gateway as it is: a secret that shares a piece with it is refused.
+    if (leaksSecret(gateway.tools, guard)) throw new GatewayConfigError(refusedText('options', secrets));
+    return gateway;
+  } catch (error) {
+    let message = guard.redact(error instanceof Error ? error.message : String(error));
+    if (leaksSecret(message, guard)) message = refusedText('options', secrets);
+    // A fresh error in final form (src/key-admission.ts, sealedError), then the sink check on the finished object.
+    const final = sealedError(new GatewayConfigError(message), ...secrets);
+    if (leaksSecret(final, guard)) throw sealedError(new GatewayConfigError(refusedText('options', secrets)), ...secrets);
+    throw final;
   }
 }
 
-/** The expense id argument, validated as a single path segment. */
-function expenseIdArg(args: GatewayJsonObject): string {
-  const id = args.id;
-  if (typeof id !== 'string' && typeof id !== 'number') {
-    throw new Error('id is required and must be a string or number.');
-  }
-  return String(id);
+interface Credentials {
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+  teamId: string;
+  environment: CorpayEnvironment;
 }
 
-/** Coerce gateway args into query parameters (drops non-scalar values). */
-function toQuery(args: GatewayJsonObject): Record<string, QueryValue> {
-  const query: Record<string, QueryValue> = {};
-  for (const [key, value] of Object.entries(args)) {
-    if (
-      value === null ||
-      typeof value === 'string' ||
-      typeof value === 'number' ||
-      typeof value === 'boolean'
-    ) {
-      query[key] = value;
+function buildCorpayGateway(options: Partial<CorpayGatewayOptions>, credentials: Credentials, redactor: SecretRedactor) {
+  // Only these options are read; anything else a host passes is dropped.
+  const { policy: hostPolicy, fetchImpl, timeoutMs, onRefreshToken } = options;
+  if (fetchImpl !== undefined && typeof fetchImpl !== 'function') throw new GatewayConfigError('options.fetchImpl must be a function.');
+  if (onRefreshToken !== undefined && typeof onRefreshToken !== 'function') throw new GatewayConfigError('options.onRefreshToken must be a function.');
+  // Always a policy: the host's, or the default one. A gateway call never reads policy or audit variables.
+  const policy: ResolvedInstancePolicy = resolveInstancePolicy(hostPolicy ?? {}, GATEWAY_TOOL_NAMES);
+  let client: CorpayGatewayClient;
+  try {
+    client = new CorpayGatewayClient({
+      ...credentials,
+      redactor,
+      ...(fetchImpl ? { fetchImpl } : {}),
+      ...(onRefreshToken ? { onRefreshToken } : {}),
+      timeoutMs,
+    });
+  } catch (error) {
+    throw new GatewayConfigError(error instanceof Error ? error.message : 'Invalid options.');
+  }
+  const offeredNames: ReadonlySet<string> = new Set(GATEWAY_TOOL_NAMES.filter(name => !policy.disabledTools.has(name)));
+  const offered: readonly GatewayTool[] = GATEWAY_TOOLS.filter(tool => offeredNames.has(`${TOOL_PREFIX}${tool.name}`));
+
+  return {
+    /** Tools enabled on this instance (tools the host's policy disables are left out). */
+    tools: corpayGatewayTools.filter(tool => !policy.disabledTools.has(canonicalToolName(tool.name))),
+    callTool(toolName: string, input: GatewayJsonObject = {}, context?: GatewayCallContext): Promise<GatewayToolResult> {
+      return runInCallScope(
+        {
+          policy,
+          redactor,
+          caller: contextValue(context?.caller, redactor),
+          // Our own id for the call: the host's request id is its text, and is not written to the audit.
+          requestId: randomUUID(),
+          offeredTools: offeredNames,
+        },
+        () =>
+          runCall(toolName, input).then(result => {
+            const final = withFailureInForm(redactDeep(result, redactor) as GatewayToolResult);
+            // The sink check, as the very last step: a result that holds a piece of a secret anywhere is withheld whole.
+            return leaksSecret(final, redactor) ? withheldResult() : final;
+          }),
+      );
+    },
+  };
+
+  async function runCall(toolName: string, input: GatewayJsonObject): Promise<GatewayToolResult> {
+    try {
+      const name = typeof toolName === 'string' ? canonicalToolName(toolName) : '';
+      const tool = BY_NAME.get(name);
+      const schema = SCHEMAS.get(name);
+      if (!tool || !schema) {
+        await writeGatewayAuditEvent({ tool: UNKNOWN_TOOL, action: 'rejected', reason: 'unsupported tool' });
+        return errorResult('Unsupported Corpay One gateway tool.');
+      }
+      const parsed = schema.safeParse(input ?? {});
+      if (!parsed.success) {
+        await writeGatewayAuditEvent({ tool: name, action: 'rejected', reason: 'invalid input' });
+        return errorResult(redactText(`Invalid input for ${tool.name}: ${z.prettifyError(parsed.error)}`, redactor));
+      }
+      const values = parsed.data as Record<string, unknown>;
+      const denied = policyDenial(name, tool);
+      const target = { expenseId: values.expenseId, vendorId: values.vendorId };
+      if (denied) {
+        await writeGatewayAuditEvent({ tool: name, action: 'policy_denied', target, reason: denied });
+        return errorResult(denied);
+      }
+      await writeGatewayAuditEvent({ tool: name, action: 'start', target });
+      let data: unknown;
+      try {
+        data = await tool.run(tool.riskLevel === 'read' ? readOnly(client, tool.name) : client, values, { teamId: credentials.teamId, offered });
+      } catch (error) {
+        await writeGatewayAuditEvent({ tool: name, action: 'error', target, status: 'error', error });
+        throw error;
+      }
+      await writeGatewayAuditEvent({ tool: name, action: 'finish', target, status: 'ok' });
+      return jsonResult(tool.summary, redactDeep(redactDeep(data, redactor), redactor));
+    } catch (error) {
+      return errorResult(redactText(error instanceof Error ? error.message : String(error), redactor), failureMetadata(error));
     }
   }
-  return query;
 }
 
-// Which coding fields are already populated on the expense, so each patch op
-// uses the right verb (replace when set, add when unset).
-interface CodingPresence {
-  hasCategory?: boolean;
-  hasLabels?: boolean;
-  hasDepartments?: boolean;
+/** Why the host's policy refuses a tool, or undefined when it may run. */
+function policyDenial(name: string, tool: GatewayTool): string | undefined {
+  const policy = currentInstancePolicy()!;
+  if (policy.disabledTools.has(name)) return 'This tool is disabled on this instance by the embedding host.';
+  if (tool.riskLevel !== 'read' && !policy.enableWrites) return 'Writes are disabled. The embedding host has not enabled writes for this instance.';
+  return undefined;
 }
 
-// Build an RFC 6902 JSON Patch from the supplied coding fields. categoryId is the
-// Corpay category id (from list_categories); labelIds/departmentIds are id arrays.
-// Confirmed against the live API: the writable paths are `/categoryId` (scalar),
-// `/labels` and `/departments` (plain id arrays). An already-set field must use
-// `replace` (Corpay 500s on `add` to a populated scalar); an unset field uses
-// `add`. Empty/absent inputs are skipped rather than clearing the field.
-function codingPatch(
-  args: GatewayJsonObject,
-  current: CodingPresence = {},
-): Array<{ op: string; path: string; value: unknown }> {
-  const ops: Array<{ op: string; path: string; value: unknown }> = [];
-  const verb = (present?: boolean) => (present ? 'replace' : 'add');
-  if (args.categoryId !== undefined && args.categoryId !== null) {
-    ops.push({ op: verb(current.hasCategory), path: '/categoryId', value: args.categoryId });
-  }
-  if (Array.isArray(args.labelIds) && args.labelIds.length > 0) {
-    ops.push({ op: verb(current.hasLabels), path: '/labels', value: args.labelIds });
-  }
-  if (Array.isArray(args.departmentIds) && args.departmentIds.length > 0) {
-    ops.push({ op: verb(current.hasDepartments), path: '/departments', value: args.departmentIds });
-  }
-  return ops;
+/** A view of the client that can only read: a read tool that tries to change something is refused. */
+function readOnly(client: CorpayGatewayClient, tool: string): CorpayGatewayClient {
+  const refuse = async () => {
+    throw new Error(`Read tool ${tool} attempted a change in Corpay One; refused.`);
+  };
+  return Object.assign(Object.create(client) as CorpayGatewayClient, { send: refuse });
 }
 
-// A coding field counts as present when it carries a value/id (Corpay returns
-// category as an object { id, … } and labels/departments as arrays).
-function isCodingPresent(value: unknown): boolean {
-  if (value === null || value === undefined) return false;
-  if (typeof value === 'object') return Boolean((value as { id?: unknown }).id);
-  return Boolean(value);
-}
+const UNKNOWN_TOOL = 'unknown_tool';
 
+/** One gateway instance, as returned by createCorpayGateway. */
+export type CorpayGateway = ReturnType<typeof createCorpayGateway>;
+
+/** The summary, then the same (already redacted) data as compact JSON in the text block. */
 function jsonResult(text: string, structuredContent: unknown): GatewayToolResult {
-  return { content: [{ type: 'text', text }], structuredContent: toGatewayJson(structuredContent) };
+  const data = JSON.parse(JSON.stringify(structuredContent ?? null)) as GatewayJsonValue;
+  return { content: [{ type: 'text', text: `${text}\n\n${JSON.stringify(data)}` }], structuredContent: data };
 }
 
-/** Coerce an arbitrary value into a JSON-safe GatewayJsonValue. */
-function toGatewayJson(value: unknown): GatewayJsonValue {
-  return JSON.parse(JSON.stringify(value ?? null)) as GatewayJsonValue;
+function errorResult(text: string, failure?: GatewayFailure): GatewayToolResult {
+  return { isError: true, content: [{ type: 'text', text }], ...(failure ? { failure } : {}) };
 }
 
-function errorResult(text: string): GatewayToolResult {
-  return { isError: true, content: [{ type: 'text', text }] };
+/** The failure metadata as it must be after redaction: on an error result only, in form. Anything else is dropped. */
+function withFailureInForm(result: GatewayToolResult): GatewayToolResult {
+  const { failure, ...rest } = result;
+  if (!result.isError || failure === undefined || failure === null || typeof failure !== 'object') return rest;
+  const status = failure.httpStatus;
+  if (typeof status !== 'number' || !Number.isInteger(status) || status < 100 || status > 599) return rest;
+  const requestId = vendorRequestId(failure.requestId);
+  return { ...rest, failure: requestId === undefined ? { httpStatus: status } : { httpStatus: status, requestId } };
 }

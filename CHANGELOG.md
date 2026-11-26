@@ -1,5 +1,40 @@
 # Changelog
 
+## 1.3.0
+
+The embeddable gateway (`./gateway`) is rebuilt for hosts that serve several
+companies from one process. The MCP server and its tools are unchanged.
+
+- One instance per company: `createCorpayGateway` takes the app's `clientId`
+  and `clientSecret`, the company's `refreshToken` and `teamId`, and reads no
+  `CORPAYONE_*` variable. The team is a hard boundary: lists are asked for it,
+  and an expense addressed by id is read first and refused unless it belongs
+  to the team.
+- When Corpay One renews the access with a new refresh token, the instance
+  uses it at once and hands it to the host (`onRefreshToken`) before anything
+  else is sent; a host that cannot keep it stops the call.
+- A frozen tool catalog (`corpayToolCatalog`) with each tool's risk level, the
+  Corpay One requests it may make, the broad mark (none is broad) and
+  `requiresConfirmation` (only `approve_expense`, which releases a bill for
+  payment).
+- Tools: the team, expenses with their activity log and approvers, coding
+  options and vendors; coding an expense, splitting it into amount lines, a
+  comment, a new vendor (no bank details), a vendor's external id, and
+  approving or declining an expense. Changes are sent directly when the
+  host's policy enables writes; there is no prepare and commit step in the
+  gateway.
+- Answers leave out bank and card numbers and signed attachment links.
+- Errors are our own texts by HTTP status, with the status and Corpay's
+  request id as `failure` metadata; a refused renewal says so.
+- Secrets are admitted only as printable ASCII of 16 characters or more that
+  share no piece with the server's own texts, and nothing that leaves an
+  instance (results, errors, the tool list, audit records) holds a piece of
+  one.
+
+Upgrade notes: the 1.2 gateway options (`enableWrites`, `env`, `contractMode`)
+and tools (`list_categories`, `write_expense_coding`) are replaced by the ones
+above; `validateWebhookSignature` and `WEBHOOK_EVENTS` are still exported.
+
 ## 1.2.0
 
 - License changed from Apache-2.0 to the Functional Source License, Version 1.1,

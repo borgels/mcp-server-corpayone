@@ -229,6 +229,40 @@ CORPAYONE_TEAM_ID=<team> npm run smoke:live   # read-only, hits the real API
 The live smoke test also asserts that a cross-team read is refused, so it
 doubles as a check that the boundary is actually in force.
 
+## Embedding (`./gateway`)
+
+`mcp-server-corpayone/gateway` is for hosts that serve several companies from
+one process and do their own per-user authorization. One instance per
+company (Corpay One team):
+
+```ts
+import { createCorpayGateway, corpayToolCatalog } from 'mcp-server-corpayone/gateway';
+
+const gateway = createCorpayGateway({
+  clientId, clientSecret,        // the host's app at app.corpayone.com/developers
+  refreshToken, teamId,          // from the company's consent
+  onRefreshToken: token => save(token),
+  policy: { enableWrites: true },
+});
+await gateway.callTool('list_expenses', { state: 'Awaiting' }, { caller: 'user-1' });
+```
+
+- Reads no `CORPAYONE_*` variable; the addresses are fixed (production by
+  default, `environment: 'staging'` for Corpay's test service).
+- The team is a hard boundary; an expense addressed by id is refused unless it
+  belongs to the team.
+- A renewed refresh token is handed to `onRefreshToken` before anything else is
+  sent.
+- `corpayToolCatalog` lists every tool with its risk level, the requests it may
+  make and `requiresConfirmation` (only `approve_expense`: approving releases
+  the bill for payment).
+- Changes run directly when the policy enables writes. There is no
+  prepare/commit step in the gateway: the host decides who may change what.
+- Answers leave out bank and card numbers and signed attachment links; errors
+  are fixed texts by HTTP status, with `failure: { httpStatus, requestId }`.
+- Secrets must be printable ASCII of at least 16 characters; nothing that
+  leaves an instance holds a piece of one.
+
 ## Attachments
 
 `corpay_get_expense_attachment` returns the invoice or receipt file itself.
