@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { fixedOutputs } from '../fallbacks.js';
-import type { SecretRedactor } from '../gateway-redactor.js';
+import { SecretRedactor } from '../gateway-redactor.js';
 import { leaksSecret } from '../key-admission.js';
 import { CorpayAnswerError, requestIdFrom } from './gateway-errors.js';
 
@@ -164,11 +164,12 @@ export class CorpayGatewayClient {
    * outputs (src/fallbacks.ts) could not be kept out of them, so the client stops instead of using it.
    */
   private admitIssued(token: string): void {
-    this.redactor.addSecret(token);
-    if (leaksSecret(fixedOutputs(), this.redactor)) {
+    // Checked on its own first: a token that collides is never registered, so no output is withheld over it either.
+    if (leaksSecret(fixedOutputs(), new SecretRedactor().addSecret(token))) {
       this.stopped = true;
       throw new Error(UNSAFE_TOKEN);
     }
+    this.redactor.addSecret(token);
   }
 
   private async renew(): Promise<string> {

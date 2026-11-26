@@ -84,13 +84,16 @@ const shortText = (max: number) => z.string().trim().min(1).max(max);
 
 /** Field names whose values are never passed on: bank and card numbers, and payment instructions. */
 const HIDDEN_FIELD = /^(iban|bban|bic|swift|swiftcode|bankaccount|bankaccountnumber|accountnumber|registrationnumber|regnumber|cardnumber|pan|cvc|cvv|paymentinstructions?|paymentmethod|paymentmethods|bankdetails|bankinformation)$/;
-/** A signed link to an attachment file: it opens the file for anyone who holds it, so it is not passed on. */
-const SIGNED_LINK = /^https:\/\/[^\s]*(?:Signature=|X-Amz-|Key-Pair-Id=)/i;
+/** A link in a text: up to a space, a quote or an angle bracket. */
+const LINK = /https?:\/\/[^\s"'<>]+/gi;
+/** A signed link opens a file for anyone who holds it, so it is not passed on, also inside a longer text. */
+const SIGNED = /Signature=|X-Amz-|Key-Pair-Id=|[?&]sig=|[?&]token=/i;
+export const SIGNED_LINK_REMOVED = '[signed link removed]';
 
 /** A copy of Corpay's answer with bank and card fields and signed links left out. */
 export function scrub(value: unknown, depth = 0): unknown {
   if (depth > 64) return undefined;
-  if (typeof value === 'string') return SIGNED_LINK.test(value) ? undefined : value;
+  if (typeof value === 'string') return value.replace(LINK, link => (SIGNED.test(link) ? SIGNED_LINK_REMOVED : link));
   if (Array.isArray(value)) return value.map(entry => scrub(entry, depth + 1)).filter(entry => entry !== undefined);
   if (value === null || typeof value !== 'object') return value;
   const out: Record<string, unknown> = {};

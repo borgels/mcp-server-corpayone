@@ -628,6 +628,7 @@ export const FIXED_CORPUS: readonly string[] = [
   "[http] ",
   "[http] 500 ",
   "[nested too deep]",
+  "[signed link removed]",
   "] is not a known gateway tool.",
   "^/v1/teams$",
   "^/v1/teams/[^/]+$",

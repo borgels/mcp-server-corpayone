@@ -213,7 +213,7 @@ describe('calls', () => {
         data: { id: 'V1', name: 'A', iban: 'DK5000400440116243', bankAccount: { regNumber: '1234' }, logo: 'https://files.example/a.png' },
       },
       'GET /external/v3/expenses/E1': {
-        data: { ...OWN_EXPENSE.data, attachments: [{ id: 'A1', url: 'https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K' }] },
+        data: { ...OWN_EXPENSE.data, note: 'Invoice: https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K attached', attachments: [{ id: 'A1', url: 'https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K' }] },
       },
     });
     const gw = gateway(impl);
@@ -221,6 +221,7 @@ describe('calls', () => {
     expect(vendor.structuredContent).toEqual({ data: { id: 'V1', name: 'A', logo: 'https://files.example/a.png' } });
     const expense = await gw.callTool('get_expense', { expenseId: 'E1' });
     expect(JSON.stringify(expense)).not.toContain('Signature');
+    expect(JSON.stringify(expense)).toContain('Invoice: [signed link removed] attached');
   });
 
   it('gives an HTTP error as our own text with failure metadata, never the body', async () => {
@@ -279,13 +280,13 @@ describe('renewal', () => {
     expect(calls.filter(call => call.method === 'POST' && call.url.includes('/external/'))).toHaveLength(0);
   });
 
-  it('stops instead of using an issued token that shares a piece with a fixed output', async () => {
-    const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () =>
-      json({ access_token: 'Withheldxq7pX2vK9mWb4TnR8yLc', expires_in: 3600 }),
-    );
-    const result = await gateway(impl).callTool('check_connection', {});
-    expect(result.isError).toBe(true);
-    expect(JSON.stringify(result)).not.toContain('Withheld');
-    expect(calls.some(call => call.url.includes('/external/'))).toBe(false);
-  });
+  for (const token of ['Withheldxq7pX2vK9mWb4TnR8yLc', 'true,"Zq7pX2vK9mWb4TnR8yLc']) {
+    it(`stops instead of using an issued token that shares a piece with a fixed output (${token.slice(0, 8)})`, async () => {
+      const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () => json({ access_token: token, expires_in: 3600 }));
+      const result = await gateway(impl).callTool('check_connection', {});
+      expect(result.isError).toBe(true);
+      expect(result.content[0]!.text).toMatch(/^Corpay One issued a token/);
+      expect(calls.some(call => call.url.includes('/external/'))).toBe(false);
+    });
+  }
 });
