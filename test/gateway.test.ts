@@ -225,7 +225,7 @@ describe('calls', () => {
   });
 
   it('scrubs every answer, also the team name in the connection check', async () => {
-    const name = 'Firma https://x.example/a?Signature=abc IBAN DK5000400440116243 4111 1111 1111 1111 123, 4111111111111111999 og 12 5555 5555 5555 4444';
+    const name = 'Firma https://x.example/a?Signature=abc IBAN DK5000400440116243 4111 1111 1111 1111 123, 4111111111111111999 og 12 5555 5555 5555 4444, 41111111111111119999 slut';
     const { impl } = stub({ 'GET /external/v1/teams': { data: { teams: [{ id: TEAM, name }] } } });
     const result = await gateway(impl).callTool('check_connection', {});
     const text = JSON.stringify(result);
