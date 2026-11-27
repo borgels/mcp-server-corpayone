@@ -327,7 +327,8 @@ function buildCorpayGateway(options: Partial<CorpayGatewayOptions>, credentials:
         },
         () =>
           runCall(toolName, input).then(result => {
-            const final = withFailureInForm(redactDeep(result, redactor) as GatewayToolResult);
+            // Every result is scrubbed, also an error that quotes the input: no bank or card number and no signed link leaves.
+            const final = withFailureInForm(redactDeep(scrub(result), redactor) as GatewayToolResult);
             // The sink check, as the very last step: a result that holds a piece of a secret anywhere is withheld whole.
             return leaksSecret(final, redactor) ? withheldResult() : final;
           }),

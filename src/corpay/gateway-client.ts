@@ -219,13 +219,16 @@ export class CorpayGatewayClient {
       // Corpay One may already have retired the old token. Until the host has kept the new one, nothing else is sent;
       // if it cannot, this client sends nothing more at all (a new instance starts from what the host has kept).
       this.refreshToken = next;
-      if (this.onRefreshToken) {
-        try {
-          await this.onRefreshToken(next);
-        } catch {
-          this.stopped = true;
-          throw new Error(NOT_KEPT);
-        }
+      // Without a host to keep it, the new token would be lost with this instance: nothing more is sent.
+      if (!this.onRefreshToken) {
+        this.stopped = true;
+        throw new Error(NOT_KEPT);
+      }
+      try {
+        await this.onRefreshToken(next);
+      } catch {
+        this.stopped = true;
+        throw new Error(NOT_KEPT);
       }
     }
     const seconds = typeof answer?.expires_in === 'number' && answer.expires_in > 0 ? Math.min(answer.expires_in, 86_400) : 3600;

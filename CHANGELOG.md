@@ -12,7 +12,8 @@ companies from one process. The MCP server and its tools are unchanged.
   to the team.
 - When Corpay One renews the access with a new refresh token, the instance
   uses it at once and hands it to the host (`onRefreshToken`) before anything
-  else is sent; a host that cannot keep it stops the call.
+  else is sent; without `onRefreshToken`, or when the host cannot keep it,
+  the instance stops and sends nothing more.
 - A frozen tool catalog (`corpayToolCatalog`) with each tool's risk level, the
   Corpay One requests it may make, the broad mark (none is broad) and
   `requiresConfirmation` (only `approve_expense`, which releases a bill for

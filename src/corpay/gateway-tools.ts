@@ -118,22 +118,15 @@ function scrubText(value: string): string {
 }
 
 /**
- * Whether a run of digits holds a card number: 13 to 19 digits that pass the Luhn check, starting where the run or one
- * of its groups starts and ending where a group ends (or, in a run without separators, starting where it starts). The
- * whole run is removed then, also what follows the card number in it.
+ * Whether a run of digits holds a card number: any 13 to 19 digits in a row in it (separators left out) that pass the
+ * Luhn check, wherever they start. The whole run is removed then. A long run of digits is often removed this way even
+ * when it holds no card number; that is the price of never letting one through.
  */
 function holdsCardNumber(run: string): boolean {
-  const groups = run.split(/[ -]/);
-  if (groups.length === 1) {
-    for (let length = 13; length <= Math.min(19, run.length); length += 1) if (luhn(run.slice(0, length))) return true;
-    return false;
-  }
-  for (let start = 0; start < groups.length; start += 1) {
-    let digits = '';
-    for (let end = start; end < groups.length; end += 1) {
-      digits += groups[end];
-      if (digits.length > 19) break;
-      if (digits.length >= 13 && luhn(digits)) return true;
+  const digits = run.replace(/[ -]/g, '');
+  for (let start = 0; start + 13 <= digits.length; start += 1) {
+    for (let length = 13; length <= 19 && start + length <= digits.length; length += 1) {
+      if (luhn(digits.slice(start, start + length))) return true;
     }
   }
   return false;
@@ -144,6 +137,8 @@ export function scrub(value: unknown, depth = 0): unknown {
   if (depth > 64) return undefined;
   if (typeof value === 'string') return scrubText(value);
   if (Array.isArray(value)) return value.map(entry => scrub(entry, depth + 1)).filter(entry => entry !== undefined);
+  // A card number may also come as a number.
+  if (typeof value === 'number') return Number.isFinite(value) && Math.abs(value) >= 1e12 && holdsCardNumber(Math.abs(value).toFixed(0)) ? NUMBER_REMOVED : value;
   if (value === null || typeof value !== 'object') return value;
   const out: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {

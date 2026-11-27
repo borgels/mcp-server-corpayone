@@ -134,6 +134,16 @@ describe('calls', () => {
     expect(calls.some(call => call.url.includes('/external/'))).toBe(false);
   });
 
+  it('sends nothing when there is no host to keep the renewed token', async () => {
+    const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () =>
+      json({ access_token: 'access-token-value-1234567890', refresh_token: NEW_REFRESH }),
+    );
+    const gw = gateway(impl);
+    expect((await gw.callTool('check_connection', {})).isError).toBe(true);
+    expect((await gw.callTool('get_company', {})).isError).toBe(true);
+    expect(calls.some(call => call.url.includes('/external/'))).toBe(false);
+  });
+
   it('says that the access was refused when the token is no longer accepted', async () => {
     const { impl } = stub({}, () => json({ error: 'invalid_grant', secret: REFRESH }, 400));
     const result = await gateway(impl).callTool('list_expenses', {});
@@ -225,11 +235,20 @@ describe('calls', () => {
   });
 
   it('scrubs every answer, also the team name in the connection check', async () => {
-    const name = 'Firma https://x.example/a?Signature=abc IBAN DK5000400440116243 4111 1111 1111 1111 123, 4111111111111111999 og 12 5555 5555 5555 4444, 41111111111111119999 slut';
-    const { impl } = stub({ 'GET /external/v1/teams': { data: { teams: [{ id: TEAM, name }] } } });
-    const result = await gateway(impl).callTool('check_connection', {});
-    const text = JSON.stringify(result);
+    const name = 'Firma https://x.example/a?Signature=abc IBAN DK5000400440116243 4111 1111 1111 1111 123, 4111111111111111999 og 12 5555 5555 5555 4444, 41111111111111119999 og 94111111111111111 slut';
+    const { impl } = stub({
+      'GET /external/v1/teams': { data: { teams: [{ id: TEAM, name }] } },
+      'GET /external/v1/teams/team-own': { data: { name: 'A', card: 4111111111111111, small: 42 } },
+    });
+    const gw = gateway(impl);
+    const text = JSON.stringify(await gw.callTool('check_connection', {}));
     for (const piece of ['Signature', 'DK5000400440116243', '4111 1111', '41111111', '5555 5555']) expect(text).not.toContain(piece);
+    const company = JSON.stringify(await gw.callTool('get_company', {}));
+    expect(company).not.toContain('4111111111111111');
+    expect(company).toContain('"small":42');
+    // An error that quotes the input is scrubbed too.
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'https://x.example/a?Signature=abc': 1 }));
+    expect(invalid).not.toContain('Signature');
   });
 
   it('gives an HTTP error as our own text with failure metadata, never the body', async () => {

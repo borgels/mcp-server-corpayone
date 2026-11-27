@@ -252,7 +252,8 @@ await gateway.callTool('list_expenses', { state: 'Awaiting' }, { caller: 'user-1
 - The team is a hard boundary; an expense addressed by id is refused unless it
   belongs to the team.
 - A renewed refresh token is handed to `onRefreshToken` before anything else is
-  sent.
+  sent. Without `onRefreshToken`, or when it fails, the instance stops and
+  sends nothing more: a token the host has not kept would be lost.
 - `corpayToolCatalog` lists every tool with its risk level, the requests it may
   make and `requiresConfirmation` (only `approve_expense`: approving releases
   the bill for payment).
