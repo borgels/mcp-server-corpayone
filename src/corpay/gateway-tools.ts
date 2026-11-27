@@ -100,7 +100,7 @@ const IBAN_START = /[A-Z]{2}\d{2}/gi;
 const IBAN_REST = /^(?:[\s\u00a0]*[A-Z0-9]){11,30}/i;
 /** A domestic account or sort code named as one in the text: "Reg.nr. 1234", "Konto 1234567890", "Account no. 12-34-56". */
 const LABELLED_ACCOUNT =
-  /\b(reg(?:istrerings)?\.?\s*nr\.?|registreringsnummer|konto(?:nr\.?|nummer)?|account(?:\s*(?:no\.?|number|nr\.?))?|acct\.?(?:\s*no\.?)?|sort\s*code|routing(?:\s*(?:no\.?|number))?|bsb|aba)([\s\u00a0:#.=-]*)\d[\d\s\u00a0-]{2,}\d/gi;
+  /\b(reg(?:istrerings)?\.?\s*nr\.?|registreringsnummer|konto(?:nr\.?|nummer)?|account(?:\s*(?:no\.?|number|nr\.?))?|acct\.?(?:\s*no\.?)?|sort\s*code|routing(?:\s*(?:no\.?|number))?|bsb|aba)([\s\u00a0:#.=-]*)\d[\d\s\u00a0./-]{2,}\d/gi;
 /** A run of 13 or more digits, in groups or not and whatever stands next to it: it holds a card number when part of it passes the Luhn check. */
 const CARD = /\d(?:[\s\u00a0._/-]*\d){12,}/g;
 export const NUMBER_REMOVED = '[bank or card number removed]';
@@ -348,10 +348,9 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
       const data = isRecord(answer) ? answer.data : undefined;
       const teams = isRecord(data) && Array.isArray(data.teams) ? data.teams : Array.isArray(data) ? data : [];
       const team = teams.find(entry => isRecord(entry) && entry.id === context.teamId);
-      return {
-        teamFound: team !== undefined,
-        team: isRecord(team) ? { id: context.teamId, name: typeof team.name === 'string' ? typed(team.name, 'text') : null } : null,
-      };
+      // Typed like any answer: a team id or name not of its kind is left out.
+      const found = isRecord(team) ? ((typed({ id: context.teamId, name: team.name }, { id: 'id', name: 'text' }) as Record<string, unknown>) ?? {}) : null;
+      return { teamFound: team !== undefined, team: found === null ? null : { name: null, ...found } };
     },
   },
   {
@@ -457,7 +456,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
       const [categories, lists] = await Promise.all([client.get<unknown>(`${base}/categories`), client.get<unknown>(`${base}/lists`)]);
       const summaries = listIn(lists, 'lists').filter(isRecord);
       const withLabels = [];
-      for (const list of summaries.slice(0, 50)) {
+      for (const list of summaries) {
         const listId = typeof list.id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(list.id) ? list.id : undefined;
         if (!listId) continue;
         const labels = await client.get<unknown>(`${base}/lists/${encodeURIComponent(listId)}/labels`);

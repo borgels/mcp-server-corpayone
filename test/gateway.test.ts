@@ -514,7 +514,7 @@ describe('typed answers: the edges', () => {
     const gw = gateway(impl);
     const expense = await gw.callTool('get_expense', { expenseId: 'E1' });
     expect(expense.structuredContent).toMatchObject({
-      notes: [{ id: 'N1', value: 'Se [faktura]([link removed]), skriv til [link removed] eller [link removed]' }],
+      notes: [{ id: 'N1', value: 'Se [faktura]([link removed] skriv til [link removed] eller [link removed]' }],
     });
     const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'https://plain.example/a': 1, '//other.example/b': 2 }));
     for (const piece of ['plain.example', 'other.example']) expect(invalid).not.toContain(piece);
@@ -559,5 +559,45 @@ describe('typed answers: the edges', () => {
     const { impl } = stub({ 'GET /external/v3/expenses/E1': OWN_EXPENSE, 'PATCH /external/v2/expenses/E1/amountlines': {} });
     const result = await gateway(impl).callTool('set_expense_amount_lines', { expenseId: 'E1', amountLines: [{ amount: 1_000_000_000_000 }, { amount: 9 }] });
     expect(result.structuredContent).toEqual({ linesSet: true, expenseId: 'E1', lines: 2 });
+  });
+});
+
+describe('typed answers: the edges, second round', () => {
+  const TOKEN_IN_LINK = ['to', 'ken=', 'Q9w8E7r6T5y4'].join('');
+
+  it('removes a link whole: parentheses in its path, a host without a dot, a scheme without "//"', async () => {
+    const value = `A https://pay.example/(invoice)?${TOKEN_IN_LINK} B //localhost/invoice?${TOKEN_IN_LINK} C webcal:private-calendar D Note: tekst kl. 14:30`;
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const gw = gateway(impl);
+    const result = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'A [link removed] B [link removed] C [link removed] D Note: tekst kl. 14:30' }] });
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', [`//localhost/a?${TOKEN_IN_LINK}`]: 1, 'webcal:private': 2 }));
+    for (const piece of ['Q9w8E7r6T5y4', 'localhost', 'private']) expect(invalid).not.toContain(piece);
+  });
+
+  it('removes a named account number grouped with dots or slashes', async () => {
+    const value = 'Konto 12.34.56 og Account no. 12/34/56 og Account no. 1234.567890';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const text = JSON.stringify(await gateway(impl).callTool('get_expense', { expenseId: 'E1' }));
+    for (const piece of ['12.34', '12/34', '567890']) expect(text).not.toContain(piece);
+  });
+
+  it('passes on every label list, however many', async () => {
+    const lists = Array.from({ length: 60 }, (_, i) => ({ id: `LS${i}`, name: `Liste ${i}` }));
+    const routes: Record<string, unknown> = {
+      'GET /external/v1/teams/team-own/categories': { data: { categories: [] } },
+      'GET /external/v1/teams/team-own/lists': { data: { lists } },
+    };
+    for (const list of lists) routes[`GET /external/v1/teams/team-own/lists/${list.id}/labels`] = { data: { labels: [] } };
+    const { impl } = stub(routes);
+    const result = (await gateway(impl).callTool('list_coding_options', {})).structuredContent as { lists: unknown[] };
+    expect(result.lists).toHaveLength(60);
+  });
+
+  it('types the connection check: a team id not of its kind is left out', async () => {
+    const odd = '1234567890123';
+    const { impl } = stub({ 'GET /external/v1/teams': { data: { teams: [{ id: odd, name: 'Demo Byg ApS' }] } } });
+    const result = await gateway(impl, { teamId: odd }).callTool('check_connection', {});
+    expect(result.structuredContent).toEqual({ teamFound: true, team: { name: 'Demo Byg ApS' } });
   });
 });

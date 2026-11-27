@@ -33,11 +33,12 @@ const MAX_TEXT = 20_000;
 const MAX_NUMBER = 1e12;
 export const LINK_REMOVED = '[link removed]';
 /**
- * A link in a free text, up to a space, a quote, a bracket or an angle bracket: any scheme with "//", a scheme that
- * needs none (mailto:, tel:, data: …), a scheme-relative "//host.name", or "www.".
+ * A link in a text, up to a space, a quote or an angle bracket (brackets and parentheses are taken with it, so no part
+ * of a link is left behind): any scheme with "//"; any scheme without, when a letter or a sign follows the colon at once
+ * (mailto:, tel:, webcal:, data: …; "Note: text" and "kl:14" are no links); a scheme-relative "//host"; or "www.". A word
+ * and a colon with no space after it is taken as a link: removing too much is the price of never letting one through.
  */
-const LINK =
-  /(?:\b[a-z][a-z0-9+.-]{0,20}:\/\/|\b(?:mailto|tel|sms|callto|data|javascript|vbscript|file|ftp|news|intent|skype|facetime):|(?<![\w:/])\/\/(?=[\w-]+\.[\w-])|\bwww\.)[^\s"'<>()[\]{}]*/gi;
+const LINK = /(?:\b[a-z][a-z0-9+.-]{0,30}:(?:\/\/|(?=[^\s\d]))|(?<![\w:/])\/\/(?=[^\s/])|\bwww\.)[^\s"'<>]*/gi;
 
 /** A text with every link replaced by LINK_REMOVED. */
 export function removeLinks(text: string): string {
