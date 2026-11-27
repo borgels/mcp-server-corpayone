@@ -21,7 +21,9 @@ its tools are unchanged.
   scheme-relative links (`//host.example`), `www.` and schemes such as
   `mailto:`. This holds for error answers too.
 - The pattern scrub of bank and card numbers stays on free text, as an extra
-  guard; it now also finds card numbers grouped with dots or slashes.
+  guard; it now also finds card and named account numbers grouped with dots
+  or slashes.
+- `list_coding_options` passes on every label list (no longer the first 50).
 - A change answers with what was done, built from its own input and typed,
   never Corpay One's body; a new vendor is answered with the vendors Corpay
   One names, typed.
