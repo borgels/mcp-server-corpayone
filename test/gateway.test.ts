@@ -5,9 +5,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { corpayToolCatalog, createCorpayGateway, type CorpayGatewayOptions } from '../src/gateway.js';
 import { visibleTexts } from '../src/key-admission.js';
 
-const SECRET = 'Zq7pX2vK9mWb4TnR8yLc3HdJ6fGs1QeU';
-const REFRESH = 'Hb5nQ8wE2rT6yU1iO4pA7sD9fG3hJ0kL';
-const NEW_REFRESH = 'Mx3cV6bN9mQ2wE5rT8yU1iO4pA7sD0fG';
+/** A made-up value that looks like a token, built when the test runs so no secret-like text stands in the source. */
+const fake = (seed: string, length = 32): string =>
+  Array.from({ length }, (_, i) => 'ZqXvKmWbTnRyLcHdJfGsQeU2345678pa'[(seed.charCodeAt(i % seed.length) * (i + 7) + i) % 32]).join('');
+const SECRET = fake('secret');
+const REFRESH = fake('refresh');
+const NEW_REFRESH = fake('renewed');
+const ACCESS = fake('access', 28);
 const TEAM = 'team-own';
 
 interface Call {
@@ -22,7 +26,7 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
 
 type Route = (call: Call) => Response | undefined;
 
-function stub(routes: Record<string, Route | unknown>, token: () => Response = () => json({ access_token: 'Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F', expires_in: 3600 })) {
+function stub(routes: Record<string, Route | unknown>, token: () => Response = () => json({ access_token: ACCESS, expires_in: 3600 })) {
   const calls: Call[] = [];
   const impl = (async (url: string | URL, init?: RequestInit) => {
     const call: Call = {
@@ -108,14 +112,14 @@ describe('calls', () => {
     expect(calls[0]!.url).toBe('https://identity.corpayone.com/connect/token');
     expect(calls[0]!.headers.Authorization).toMatch(/^Basic /);
     expect(calls[1]!.url).toBe('https://api.corpayone.com/external/v1/teams');
-    expect(calls[1]!.headers.Authorization).toBe('Bearer Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F');
+    expect(calls[1]!.headers.Authorization).toBe(`Bearer ${ACCESS}`);
   });
 
   it('hands a renewed refresh token to the host before anything else is sent', async () => {
     const order: string[] = [];
     const { impl } = stub(
       { 'GET /external/v1/teams': () => (order.push('teams'), json({ data: { teams: [] } })) },
-      () => json({ access_token: 'Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F', expires_in: 3600, refresh_token: NEW_REFRESH }),
+      () => json({ access_token: ACCESS, expires_in: 3600, refresh_token: NEW_REFRESH }),
     );
     const saved: string[] = [];
     const gw = gateway(impl, { onRefreshToken: async token => void (order.push('saved'), saved.push(token)) });
@@ -127,7 +131,7 @@ describe('calls', () => {
 
   it('sends nothing when the host cannot keep the renewed token', async () => {
     const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () =>
-      json({ access_token: 'Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F', refresh_token: NEW_REFRESH }),
+      json({ access_token: ACCESS, refresh_token: NEW_REFRESH }),
     );
     const result = await gateway(impl, { onRefreshToken: () => Promise.reject(new Error('disk full')) }).callTool('check_connection', {});
     expect(result.isError).toBe(true);
@@ -136,7 +140,7 @@ describe('calls', () => {
 
   it('sends nothing when there is no host to keep the renewed token', async () => {
     const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () =>
-      json({ access_token: 'Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F', refresh_token: NEW_REFRESH }),
+      json({ access_token: ACCESS, refresh_token: NEW_REFRESH }),
     );
     const gw = gateway(impl);
     expect((await gw.callTool('check_connection', {})).isError).toBe(true);
@@ -146,7 +150,7 @@ describe('calls', () => {
 
   it('sends nothing when a renewed token cannot be kept as it came', async () => {
     const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () =>
-      json({ access_token: 'Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F', refresh_token: 'new-short-token' }),
+      json({ access_token: ACCESS, refresh_token: 'new-short-token' }),
     );
     const result = await gateway(impl, { onRefreshToken: () => undefined }).callTool('check_connection', {});
     expect(result.isError).toBe(true);
@@ -165,7 +169,7 @@ describe('calls', () => {
   it('refuses an issued token that shares a piece with the tool list, and does not use it', async () => {
     const colliding = 'approve_expensexYz-0123';
     const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () =>
-      json({ access_token: 'Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F', refresh_token: colliding }),
+      json({ access_token: ACCESS, refresh_token: colliding }),
     );
     const kept: string[] = [];
     const result = await gateway(impl, { onRefreshToken: token => void kept.push(token) }).callTool('check_connection', {});
@@ -334,7 +338,7 @@ describe('renewal', () => {
   it('sends nothing more from an instance whose renewed token the host could not keep', async () => {
     const { impl, calls } = stub(
       { 'POST /external/v2/teams/team-own/vendors': { data: {} } },
-      () => json({ access_token: 'Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F', refresh_token: NEW_REFRESH }),
+      () => json({ access_token: ACCESS, refresh_token: NEW_REFRESH }),
     );
     let failures = 0;
     const gw = gateway(impl, { onRefreshToken: () => ((failures += 1), Promise.reject(new Error('disk full'))) });
@@ -344,7 +348,7 @@ describe('renewal', () => {
     expect(calls.filter(call => call.method === 'POST' && call.url.includes('/external/'))).toHaveLength(0);
   });
 
-  for (const token of ['Withheldxq7pX2vK9mWb4TnR8yLc', 'true,"Zq7pX2vK9mWb4TnR8yLc']) {
+  for (const token of [`Withheld${fake('withheld', 20)}`, `true,"${fake('fixed', 22)}`]) {
     it(`stops instead of using an issued token that shares a piece with a fixed output (${token.slice(0, 8)})`, async () => {
       const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () => json({ access_token: token, expires_in: 3600 }));
       const result = await gateway(impl).callTool('check_connection', {});
