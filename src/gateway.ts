@@ -7,7 +7,7 @@ import { redactDeep, redactText } from './redaction.js';
 import { writeGatewayAuditEvent } from './corpay/gateway-audit.js';
 import { basicCredentials, CorpayGatewayClient, type CorpayEnvironment } from './corpay/gateway-client.js';
 import { failureMetadata, vendorRequestId, type FailureMetadata } from './corpay/gateway-errors.js';
-import { GATEWAY_TOOLS, type GatewayClientView, type GatewayTool } from './corpay/gateway-tools.js';
+import { GATEWAY_TOOLS, scrub, type GatewayClientView, type GatewayTool } from './corpay/gateway-tools.js';
 import {
   canonicalToolName,
   currentInstancePolicy,
@@ -365,7 +365,8 @@ function buildCorpayGateway(options: Partial<CorpayGatewayOptions>, credentials:
         throw error;
       }
       await writeGatewayAuditEvent({ tool: name, action: 'finish', target, status: 'ok' });
-      return jsonResult(tool.summary, redactDeep(redactDeep(data, redactor), redactor));
+      // Every answer is scrubbed here as well, whatever the tool did: no bank or card number and no signed link leaves.
+      return jsonResult(tool.summary, redactDeep(redactDeep(scrub(data), redactor), redactor));
     } catch (error) {
       return errorResult(redactText(error instanceof Error ? error.message : String(error), redactor), failureMetadata(error));
     }

@@ -224,6 +224,14 @@ describe('calls', () => {
     expect(JSON.stringify(expense)).toContain('Invoice: [signed link removed] attached; pay to IBAN [bank or card number removed], card [bank or card number removed], order 98765432109876');
   });
 
+  it('scrubs every answer, also the team name in the connection check', async () => {
+    const name = 'Firma https://x.example/a?Signature=abc IBAN DK5000400440116243 4111 1111 1111 1111';
+    const { impl } = stub({ 'GET /external/v1/teams': { data: { teams: [{ id: TEAM, name }] } } });
+    const result = await gateway(impl).callTool('check_connection', {});
+    const text = JSON.stringify(result);
+    for (const piece of ['Signature', 'DK5000400440116243', '4111 1111']) expect(text).not.toContain(piece);
+  });
+
   it('gives an HTTP error as our own text with failure metadata, never the body', async () => {
     const { impl } = stub({});
     const result = await gateway(impl).callTool('get_vendor', { vendorId: 'V9' });
