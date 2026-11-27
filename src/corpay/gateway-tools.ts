@@ -89,10 +89,10 @@ const LINK = /https?:\/\/[^\s"'<>]+/gi;
 /** A signed link opens a file for anyone who holds it, so it is not passed on, also inside a longer text. */
 const SIGNED = /Signature=|X-Amz-|Key-Pair-Id=|[?&]sig=|[?&]token=/i;
 export const SIGNED_LINK_REMOVED = '[signed link removed]';
-/** An IBAN in a text, in capitals or not: country code, check digits and 11 to 30 more letters or digits, in groups or not. */
-const IBAN = /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30}\b/gi;
+/** An IBAN candidate in a text, in capitals or not and whatever stands before it: country code, check digits and 11 to 30 more letters or digits, in groups or not. */
+const IBAN = /[A-Z]{2}\d{2}(?:[\s\u00a0]?[A-Z0-9]){11,30}/gi;
 /** A run of 13 or more digits, in groups or not and whatever stands next to it: it holds a card number when part of it passes the Luhn check. */
-const CARD = /\d(?:[ -]?\d){12,}/g;
+const CARD = /\d(?:[\s\u00a0-]?\d){12,}/g;
 export const NUMBER_REMOVED = '[bank or card number removed]';
 
 /** Whether a run of digits passes the Luhn check, as every card number does. */
@@ -109,11 +109,45 @@ function luhn(digits: string): boolean {
   return sum % 10 === 0;
 }
 
+/** Whether a link is signed, also when its parameters are percent-encoded (once or several times). */
+function isSigned(link: string): boolean {
+  let text = link;
+  for (let round = 0; round < 4; round += 1) {
+    if (SIGNED.test(text)) return true;
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(text);
+    } catch {
+      // Not decodable as a whole: decode what can be, so an encoded name is still seen.
+      decoded = text.replace(/%[0-9a-f]{2}/gi, code => String.fromCharCode(parseInt(code.slice(1), 16)));
+    }
+    if (decoded === text) return false;
+    text = decoded;
+  }
+  return true;
+}
+
+/** Whether a candidate holds an IBAN: 15 to 34 of its letters and digits from the start pass the mod-97 check. */
+function holdsIban(candidate: string): boolean {
+  const compact = candidate.replace(/[\s\u00a0]/g, '').toUpperCase();
+  for (let length = 15; length <= Math.min(34, compact.length); length += 1) {
+    const iban = compact.slice(0, length);
+    const moved = iban.slice(4) + iban.slice(0, 4);
+    let rest = 0;
+    for (const char of moved) {
+      const value = char >= 'A' ? String(char.charCodeAt(0) - 55) : char;
+      for (const digit of value) rest = (rest * 10 + Number(digit)) % 97;
+    }
+    if (rest === 1) return true;
+  }
+  return false;
+}
+
 /** A text with signed links, IBANs and card numbers removed; everything else as it is. */
 function scrubText(value: string): string {
   return value
-    .replace(LINK, link => (SIGNED.test(link) ? SIGNED_LINK_REMOVED : link))
-    .replace(IBAN, NUMBER_REMOVED)
+    .replace(LINK, link => (isSigned(link) ? SIGNED_LINK_REMOVED : link))
+    .replace(IBAN, candidate => (holdsIban(candidate) ? NUMBER_REMOVED : candidate))
     .replace(CARD, run => (holdsCardNumber(run) ? NUMBER_REMOVED : run));
 }
 
@@ -123,7 +157,7 @@ function scrubText(value: string): string {
  * when it holds no card number; that is the price of never letting one through.
  */
 function holdsCardNumber(run: string): boolean {
-  const digits = run.replace(/[ -]/g, '');
+  const digits = run.replace(/[\s\u00a0-]/g, '');
   for (let start = 0; start + 13 <= digits.length; start += 1) {
     for (let length = 13; length <= 19 && start + length <= digits.length; length += 1) {
       if (luhn(digits.slice(start, start + length))) return true;

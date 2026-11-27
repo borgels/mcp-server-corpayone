@@ -22,7 +22,7 @@ const json = (body: unknown, status = 200, headers: Record<string, string> = {})
 
 type Route = (call: Call) => Response | undefined;
 
-function stub(routes: Record<string, Route | unknown>, token: () => Response = () => json({ access_token: 'access-token-value-1234567890', expires_in: 3600 })) {
+function stub(routes: Record<string, Route | unknown>, token: () => Response = () => json({ access_token: 'Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F', expires_in: 3600 })) {
   const calls: Call[] = [];
   const impl = (async (url: string | URL, init?: RequestInit) => {
     const call: Call = {
@@ -108,14 +108,14 @@ describe('calls', () => {
     expect(calls[0]!.url).toBe('https://identity.corpayone.com/connect/token');
     expect(calls[0]!.headers.Authorization).toMatch(/^Basic /);
     expect(calls[1]!.url).toBe('https://api.corpayone.com/external/v1/teams');
-    expect(calls[1]!.headers.Authorization).toBe('Bearer access-token-value-1234567890');
+    expect(calls[1]!.headers.Authorization).toBe('Bearer Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F');
   });
 
   it('hands a renewed refresh token to the host before anything else is sent', async () => {
     const order: string[] = [];
     const { impl } = stub(
       { 'GET /external/v1/teams': () => (order.push('teams'), json({ data: { teams: [] } })) },
-      () => json({ access_token: 'access-token-value-1234567890', expires_in: 3600, refresh_token: NEW_REFRESH }),
+      () => json({ access_token: 'Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F', expires_in: 3600, refresh_token: NEW_REFRESH }),
     );
     const saved: string[] = [];
     const gw = gateway(impl, { onRefreshToken: async token => void (order.push('saved'), saved.push(token)) });
@@ -127,7 +127,7 @@ describe('calls', () => {
 
   it('sends nothing when the host cannot keep the renewed token', async () => {
     const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () =>
-      json({ access_token: 'access-token-value-1234567890', refresh_token: NEW_REFRESH }),
+      json({ access_token: 'Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F', refresh_token: NEW_REFRESH }),
     );
     const result = await gateway(impl, { onRefreshToken: () => Promise.reject(new Error('disk full')) }).callTool('check_connection', {});
     expect(result.isError).toBe(true);
@@ -136,7 +136,7 @@ describe('calls', () => {
 
   it('sends nothing when there is no host to keep the renewed token', async () => {
     const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () =>
-      json({ access_token: 'access-token-value-1234567890', refresh_token: NEW_REFRESH }),
+      json({ access_token: 'Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F', refresh_token: NEW_REFRESH }),
     );
     const gw = gateway(impl);
     expect((await gw.callTool('check_connection', {})).isError).toBe(true);
@@ -146,7 +146,7 @@ describe('calls', () => {
 
   it('sends nothing when a renewed token cannot be kept as it came', async () => {
     const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () =>
-      json({ access_token: 'access-token-value-1234567890', refresh_token: 'new-short-token' }),
+      json({ access_token: 'Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F', refresh_token: 'new-short-token' }),
     );
     const result = await gateway(impl, { onRefreshToken: () => undefined }).callTool('check_connection', {});
     expect(result.isError).toBe(true);
@@ -159,6 +159,18 @@ describe('calls', () => {
     const result = await gateway(impl, { onRefreshToken: token => void kept.push(token) }).callTool('check_connection', {});
     expect(result.isError).toBe(true);
     expect(kept).toEqual([NEW_REFRESH]);
+    expect(calls.some(call => call.url.includes('/external/'))).toBe(false);
+  });
+
+  it('refuses an issued token that shares a piece with the tool list, and does not use it', async () => {
+    const colliding = 'approve_expensexYz-0123';
+    const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () =>
+      json({ access_token: 'Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F', refresh_token: colliding }),
+    );
+    const kept: string[] = [];
+    const result = await gateway(impl, { onRefreshToken: token => void kept.push(token) }).callTool('check_connection', {});
+    expect(result.isError).toBe(true);
+    expect(kept).toEqual([]);
     expect(calls.some(call => call.url.includes('/external/'))).toBe(false);
   });
 
@@ -257,7 +269,7 @@ describe('calls', () => {
     const { impl } = stub({
       'GET /external/v1/teams': { data: { teams: [{ id: TEAM, name }] } },
       'GET /external/v1/teams/team-own': {
-        data: { name: 'A PAN4111111111111111 og 4111111111111111USD og gb29nwbk60161331926819', gb29nwbk60161331926819: 3, card: 4111111111111111, small: 42, '4111111111111111': 1, 'https://x.example/a?Signature=abc': 2 },
+        data: { name: 'A PAN4111111111111111 og 4111111111111111USD og gb29nwbk60161331926819 og IBANgb29nwbk60161331926819 og DK50\t0040\t0440\t1162\t43 og 4111\t1111\u00a01111 1111 og https://files.example/invoice?sv=2024-01-01&%73ig=abcdef og id ab12cdefghijklmnop', gb29nwbk60161331926819: 3, card: 4111111111111111, small: 42, '4111111111111111': 1, 'https://x.example/a?Signature=abc': 2 },
       },
     });
     const gw = gateway(impl);
@@ -267,6 +279,9 @@ describe('calls', () => {
     expect(company).not.toContain('4111111111111111');
     expect(company).not.toContain('Signature');
     expect(company).not.toContain('gb29nwbk');
+    for (const piece of ['0440', '4111', '%73ig']) expect(company).not.toContain(piece);
+    // Letters and digits that fail the IBAN check are kept.
+    expect(company).toContain('ab12cdefghijklmnop');
     expect(company).toContain('"small":42');
     // An error that quotes the input is scrubbed too.
     const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'https://x.example/a?Signature=abc': 1 }));
@@ -319,7 +334,7 @@ describe('renewal', () => {
   it('sends nothing more from an instance whose renewed token the host could not keep', async () => {
     const { impl, calls } = stub(
       { 'POST /external/v2/teams/team-own/vendors': { data: {} } },
-      () => json({ access_token: 'access-token-value-1234567890', refresh_token: NEW_REFRESH }),
+      () => json({ access_token: 'Qx7vWm2Rt9Lp4Nz8Kc3Bh6Jd5F', refresh_token: NEW_REFRESH }),
     );
     let failures = 0;
     const gw = gateway(impl, { onRefreshToken: () => ((failures += 1), Promise.reject(new Error('disk full'))) });

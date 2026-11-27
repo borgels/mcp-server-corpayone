@@ -94,6 +94,8 @@ export interface CorpayGatewayClientOptions {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   onRefreshToken?: (refreshToken: string) => void | Promise<void>;
+  /** What the gateway shows as it is, besides the fixed outputs (its tool list): an issued token may share no piece with it. */
+  exposed?: unknown;
 }
 
 export class CorpayGatewayClient {
@@ -102,6 +104,7 @@ export class CorpayGatewayClient {
   private refreshToken: string;
   private readonly origins: { api: string; identity: string };
   private readonly redactor: SecretRedactor;
+  private readonly exposed: unknown;
   private readonly fetchImpl: typeof fetch;
   private readonly onRefreshToken?: (refreshToken: string) => void | Promise<void>;
   private access?: { token: string; expiresAt: number };
@@ -119,6 +122,7 @@ export class CorpayGatewayClient {
     this.redactor.addSecret(this.clientSecret).addSecret(this.refreshToken).addSecret(basicCredentials(this.clientId, this.clientSecret));
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.onRefreshToken = options.onRefreshToken;
+    this.exposed = options.exposed;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     if (!Number.isSafeInteger(this.timeoutMs) || this.timeoutMs < 1 || this.timeoutMs > MAX_TIMEOUT_MS) {
       throw new Error(`timeoutMs must be an integer between 1 and ${MAX_TIMEOUT_MS}.`);
@@ -165,7 +169,8 @@ export class CorpayGatewayClient {
    */
   private admitIssued(token: string): void {
     // Checked on its own first: a token that collides is never registered, so no output is withheld over it either.
-    if (leaksSecret(fixedOutputs(), new SecretRedactor().addSecret(token))) {
+    const alone = new SecretRedactor().addSecret(token);
+    if (leaksSecret(fixedOutputs(), alone) || (this.exposed !== undefined && leaksSecret(this.exposed, alone))) {
       this.stopped = true;
       throw new Error(UNSAFE_TOKEN);
     }

@@ -305,6 +305,7 @@ function buildCorpayGateway(options: Partial<CorpayGatewayOptions>, credentials:
       ...(fetchImpl ? { fetchImpl } : {}),
       ...(onRefreshToken ? { onRefreshToken } : {}),
       timeoutMs,
+      exposed: corpayGatewayTools,
     });
   } catch (error) {
     throw new GatewayConfigError(error instanceof Error ? error.message : 'Invalid options.');
