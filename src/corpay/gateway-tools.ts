@@ -1,6 +1,6 @@
 import { z } from 'zod/v4';
 import type { GatewayQueryValue, GatewayWriteMethod } from './gateway-client.js';
-import { ACTIVITY, APPROVER, CATEGORY, dataOf, EXPENSE, EXPENSE_IN_LIST, LABEL_LIST, project, TEAM, VENDOR, type Shape } from './gateway-answers.js';
+import { ACTIVITY, APPROVER, CATEGORY, CHANGED, dataOf, EXPENSE, EXPENSE_IN_LIST, LABEL_LIST, project, removeLinks, TEAM, VENDOR, type Shape } from './gateway-answers.js';
 
 /** What a tool may use of the client: reads, and (for a write tool) changes. */
 export interface GatewayClientView {
@@ -89,7 +89,7 @@ const shortText = (max: number) => z.string().trim().min(1).max(max);
 
 /** Field names whose values are never passed on: bank and card numbers, and payment instructions. */
 const HIDDEN_FIELD = /^(iban|bban|bic|swift|swiftcode|bankaccount|bankaccountnumber|accountnumber|registrationnumber|regnumber|cardnumber|pan|cvc|cvv|paymentinstructions?|paymentmethod|paymentmethods|bankdetails|bankinformation)$/;
-/** A link in a text: up to a space, a quote or an angle bracket. */
+/** A web link in a text: up to a space, a quote or an angle bracket. Signed ones are named as such when removed. */
 const LINK = /https?:\/\/[^\s"'<>]+/gi;
 /** A signed link opens a file for anyone who holds it, so it is not passed on, also inside a longer text. */
 const SIGNED = /Signature=|X-Amz-|Key-Pair-Id=|[?&]sig=|[?&]token=/i;
@@ -102,7 +102,7 @@ const IBAN_REST = /^(?:[\s\u00a0]*[A-Z0-9]){11,30}/i;
 const LABELLED_ACCOUNT =
   /\b(reg(?:istrerings)?\.?\s*nr\.?|registreringsnummer|konto(?:nr\.?|nummer)?|account(?:\s*(?:no\.?|number|nr\.?))?|acct\.?(?:\s*no\.?)?|sort\s*code|routing(?:\s*(?:no\.?|number))?|bsb|aba)([\s\u00a0:#.=-]*)\d[\d\s\u00a0-]{2,}\d/gi;
 /** A run of 13 or more digits, in groups or not and whatever stands next to it: it holds a card number when part of it passes the Luhn check. */
-const CARD = /\d(?:[\s\u00a0-]*\d){12,}/g;
+const CARD = /\d(?:[\s\u00a0._/-]*\d){12,}/g;
 export const NUMBER_REMOVED = '[bank or card number removed]';
 
 /** Whether a run of digits passes the Luhn check, as every card number does. */
@@ -188,9 +188,9 @@ function withoutIbans(value: string): string {
   return out + value.slice(from);
 }
 
-/** A text with signed links, IBANs, named account numbers and card numbers removed; everything else as it is. */
+/** A text with links, IBANs, named account numbers and card numbers removed; everything else as it is. */
 function scrubText(value: string): string {
-  return withoutIbans(value.replace(LINK, link => (isSigned(link) ? SIGNED_LINK_REMOVED : link)))
+  return withoutIbans(removeLinks(value.replace(LINK, link => (isSigned(link) ? SIGNED_LINK_REMOVED : link))))
     .replace(LABELLED_ACCOUNT, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(CARD, run => (holdsCardNumber(run) ? NUMBER_REMOVED : run));
 }
@@ -201,7 +201,7 @@ function scrubText(value: string): string {
  * when it holds no card number; that is the price of never letting one through.
  */
 function holdsCardNumber(run: string): boolean {
-  const digits = run.replace(/[\s\u00a0-]/g, '');
+  const digits = run.replace(/[\s\u00a0._/-]/g, '');
   for (let start = 0; start + 13 <= digits.length; start += 1) {
     for (let length = 13; length <= 19 && start + length <= digits.length; length += 1) {
       if (luhn(digits.slice(start, start + length))) return true;
@@ -235,8 +235,11 @@ export function scrub(value: unknown, depth = 0): unknown {
 
 /** A page's counts. */
 const PAGE: Shape = { total: 'number', offset: 'number', count: 'number' };
-/** A vendor's link to the accounting system, as asked for. */
-const LINKED: Shape = { vendorId: 'id', externalId: 'text', source: 'text' };
+
+/** What a change answers, typed: what was done, from its own input. */
+function changed(value: Record<string, unknown>): Record<string, unknown> {
+  return (typed(value, CHANGED) as Record<string, unknown> | undefined) ?? {};
+}
 
 /** An answer typed by its shape: links removed from free text, then the pattern scrub as an extra guard. */
 export function typed(value: unknown, shape: Shape): unknown {
@@ -520,12 +523,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
       if (input.categoryId !== undefined) patch.push({ op: has(current.category) ? 'replace' : 'add', path: '/categoryId', value: input.categoryId });
       if (input.labelIds !== undefined) patch.push({ op: has(current.labels) ? 'replace' : 'add', path: '/labels', value: input.labelIds });
       await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}`, patch, 'application/json-patch+json');
-      return {
-        coded: true,
-        expenseId,
-        ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
-        ...(input.labelIds !== undefined ? { labelIds: input.labelIds } : {}),
-      };
+      return changed({ coded: true, expenseId, categoryId: input.categoryId, labelIds: input.labelIds });
     },
   },
   {
@@ -560,7 +558,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
         labels: line.labels ?? [],
       }));
       await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/amountlines`, { amountLines: lines });
-      return { linesSet: true, expenseId, lines: lines.length, total: lines.reduce((sum, line) => sum + line.amount, 0) };
+      return changed({ linesSet: true, expenseId, lines: lines.length, total: lines.reduce((sum, line) => sum + line.amount, 0) });
     },
   },
   {
@@ -575,7 +573,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
       const expenseId = String(input.expenseId);
       await expenseInTeam(client, expenseId, context.teamId);
       await client.send('POST', `/v2/expenses/${encodeURIComponent(expenseId)}/activities`, { body: input.comment, type: 'Text' });
-      return { commented: true, expenseId };
+      return changed({ commented: true, expenseId });
     },
   },
   {
@@ -619,7 +617,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, input, context) {
       const path = `/v2/teams/${encodeURIComponent(context.teamId)}/vendors/${encodeURIComponent(String(input.vendorId))}/external-id`;
       await client.send('PATCH', path, { externalId: input.externalId, source: input.source });
-      return { linked: true, ...(typed({ vendorId: input.vendorId, externalId: input.externalId, source: input.source }, LINKED) as object) };
+      return changed({ linked: true, vendorId: input.vendorId, externalId: input.externalId, source: input.source });
     },
   },
   {
@@ -634,7 +632,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
       const expenseId = String(input.expenseId);
       await expenseInTeam(client, expenseId, context.teamId);
       await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/decline`, { note: input.note });
-      return { declined: true, expenseId };
+      return changed({ declined: true, expenseId });
     },
   },
   {
@@ -651,7 +649,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
       const expenseId = String(input.expenseId);
       await expenseInTeam(client, expenseId, context.teamId);
       await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/approve`);
-      return { approved: true, expenseId };
+      return changed({ approved: true, expenseId });
     },
   },
 ];

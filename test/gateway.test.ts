@@ -500,3 +500,64 @@ describe('typed answers', () => {
     }
   });
 });
+
+describe('typed answers: the edges', () => {
+  it('removes every kind of link, also in an error that quotes the input', async () => {
+    const { impl } = stub({
+      'GET /external/v3/expenses/E1': {
+        data: {
+          ...OWN_EXPENSE.data,
+          notes: [{ id: 'N1', value: 'Se [faktura](//pay.example/invoice), skriv til mailto:bogholderi@example.com eller ftp://files.example/a' }],
+        },
+      },
+    });
+    const gw = gateway(impl);
+    const expense = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(expense.structuredContent).toMatchObject({
+      notes: [{ id: 'N1', value: 'Se [faktura]([link removed]), skriv til [link removed] eller [link removed]' }],
+    });
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'https://plain.example/a': 1, '//other.example/b': 2 }));
+    for (const piece of ['plain.example', 'other.example']) expect(invalid).not.toContain(piece);
+  });
+
+  it('removes a card number written with dots or slashes', async () => {
+    const { impl } = stub({
+      'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value: 'Kort 4111.1111.1111.1111 og 5555/5555/5555/4444' }] } },
+    });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    for (const piece of ['4111', '5555']) expect(JSON.stringify(result)).not.toContain(piece);
+  });
+
+  it('types the answer of a change too: an id that is not of its kind is left out', async () => {
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': OWN_EXPENSE, 'PATCH /external/v2/expenses/E1': {} });
+    const result = await gateway(impl).callTool('set_expense_coding', { expenseId: 'E1', categoryId: '4111111111111111', labelIds: ['L1'] });
+    expect(result.structuredContent).toEqual({ coded: true, expenseId: 'E1', labelIds: ['L1'] });
+  });
+
+  it('keeps company and VAT numbers with their digits', async () => {
+    const { impl } = stub({
+      'GET /external/v1/teams/team-own': { data: { team: { id: TEAM, name: 'Demo Byg ApS', vat: 'GB123456789', countryCode: 'GB' } } },
+      'GET /external/v2/teams/team-own/vendors/V1': { data: { id: 'V1', name: 'A', identification: 'NL123456789B01' } },
+    });
+    const gw = gateway(impl);
+    expect((await gw.callTool('get_company', {})).structuredContent).toEqual({ id: TEAM, name: 'Demo Byg ApS', vat: 'GB123456789', countryCode: 'GB' });
+    expect((await gw.callTool('get_vendor', { vendorId: 'V1' })).structuredContent).toEqual({ id: 'V1', name: 'A', identification: 'NL123456789B01' });
+  });
+
+  it('passes on a long list whole', async () => {
+    const labels = Array.from({ length: 1500 }, (_, i) => ({ id: `LB${i}`, value: `Projekt ${i}`, listId: 'LS1' }));
+    const { impl } = stub({
+      'GET /external/v1/teams/team-own/categories': { data: { categories: [] } },
+      'GET /external/v1/teams/team-own/lists': { data: { lists: [{ id: 'LS1', name: 'Projekter' }] } },
+      'GET /external/v1/teams/team-own/lists/LS1/labels': { data: { labels } },
+    });
+    const result = (await gateway(impl).callTool('list_coding_options', {})).structuredContent as { lists: Array<{ labels: unknown[] }> };
+    expect(result.lists[0]!.labels).toHaveLength(1500);
+  });
+
+  it('keeps a number a number: one too large to be an amount is left out, never turned into text', async () => {
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': OWN_EXPENSE, 'PATCH /external/v2/expenses/E1/amountlines': {} });
+    const result = await gateway(impl).callTool('set_expense_amount_lines', { expenseId: 'E1', amountLines: [{ amount: 1_000_000_000_000 }, { amount: 9 }] });
+    expect(result.structuredContent).toEqual({ linesSet: true, expenseId: 'E1', lines: 2 });
+  });
+});

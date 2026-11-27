@@ -13,7 +13,7 @@
  */
 
 /** What a field is, and so how its value is checked. */
-export type FieldKind = 'id' | 'code' | 'text' | 'date' | 'number' | 'boolean';
+export type FieldKind = 'id' | 'code' | 'taxId' | 'text' | 'date' | 'number' | 'boolean';
 /** An answer type: the fields it may hold, each a kind, a nested type or a list of one. */
 export type Shape = FieldKind | { readonly [field: string]: Shape } | readonly [Shape];
 
@@ -25,11 +25,24 @@ const CODE = /^[\p{L}0-9 ._+-]{0,60}$/u;
 const HOST_IN_CODE = /www\.|[\p{L}\p{N}-]\.\p{L}{2,}/iu;
 /** A date or a date and time as ISO 8601. */
 const DATE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.]{2,15}(?:Z|[+-]\d{2}:?\d{2})?)?$/;
+/** A company or VAT number: letters, digits, spaces, dots and dashes; at most 12 digits in a row. */
+const TAX_ID = /^[A-Za-z0-9 .-]{2,30}$/;
 /** Longest free text passed on. */
 const MAX_TEXT = 20_000;
+/** Numbers at or above this are no amount or count Corpay One gives, and may be card numbers: they are left out. */
+const MAX_NUMBER = 1e12;
 export const LINK_REMOVED = '[link removed]';
-/** A link in a free text: a scheme and "//", or "www.", up to a space, a quote or an angle bracket. */
-const LINK = /(?:[a-z][a-z0-9+.-]{0,20}:\/\/|www\.)[^\s"'<>]*/gi;
+/**
+ * A link in a free text, up to a space, a quote, a bracket or an angle bracket: any scheme with "//", a scheme that
+ * needs none (mailto:, tel:, data: …), a scheme-relative "//host.name", or "www.".
+ */
+const LINK =
+  /(?:\b[a-z][a-z0-9+.-]{0,20}:\/\/|\b(?:mailto|tel|sms|callto|data|javascript|vbscript|file|ftp|news|intent|skype|facetime):|(?<![\w:/])\/\/(?=[\w-]+\.[\w-])|\bwww\.)[^\s"'<>()[\]{}]*/gi;
+
+/** A text with every link replaced by LINK_REMOVED. */
+export function removeLinks(text: string): string {
+  return text.replace(LINK, LINK_REMOVED);
+}
 
 /** A free text as it is passed on: links removed, then the pattern scrub as an extra guard. */
 export type TextScrub = (text: string) => string;
@@ -41,7 +54,7 @@ export function project(value: unknown, shape: Shape, scrubText: TextScrub, dept
   if (Array.isArray(shape)) {
     if (!Array.isArray(value)) return undefined;
     const out: unknown[] = [];
-    for (const entry of value.slice(0, 1000)) {
+    for (const entry of value) {
       const kept = project(entry, (shape as readonly [Shape])[0], scrubText, depth + 1);
       if (kept !== undefined) out.push(kept);
     }
@@ -70,15 +83,21 @@ function field(value: unknown, kind: FieldKind, scrubText: TextScrub): unknown {
       if (typeof value !== 'string' || !CODE.test(value) || HOST_IN_CODE.test(value)) return undefined;
       // Nine digits or more in a row, also across spaces, dots and dashes, is no code but an account or card number.
       return /\d{9}/.test(value.replace(/[\s.-]/g, '')) ? undefined : value;
+    case 'taxId':
+      // A company or VAT number keeps its digits (up to 12 in a row, separators left out), unless it holds a host name or
+      // the pattern scrub would take something out of it (an IBAN, a card number).
+      if (typeof value !== 'string' || !TAX_ID.test(value) || HOST_IN_CODE.test(value)) return undefined;
+      if (/\d{13}/.test(value.replace(/[\s.-]/g, ''))) return undefined;
+      return scrubText(value) === value ? value : undefined;
     case 'date':
       return typeof value === 'string' && DATE.test(value) ? value : undefined;
     case 'number':
-      return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+      return typeof value === 'number' && Number.isFinite(value) && Math.abs(value) < MAX_NUMBER ? value : undefined;
     case 'boolean':
       return typeof value === 'boolean' ? value : undefined;
     case 'text':
       if (typeof value !== 'string') return undefined;
-      return scrubText(value.slice(0, MAX_TEXT).replace(LINK, LINK_REMOVED));
+      return scrubText(removeLinks(value.slice(0, MAX_TEXT)));
   }
 }
 
@@ -108,7 +127,7 @@ const VENDOR_REF = { id: 'id', name: 'text', externalId: 'text' } as const;
 export const TEAM: Shape = {
   id: 'id',
   name: 'text',
-  vat: 'code',
+  vat: 'taxId',
   address: 'text',
   city: 'text',
   postalCode: 'code',
@@ -216,12 +235,30 @@ export const CATEGORY: Shape = { id: 'id', name: 'text', number: 'code', externa
 /** A label list (projects, cost types …) and its labels. */
 export const LABEL_LIST: Shape = { id: 'id', name: 'text', type: 'code', dataType: 'code', labels: [LABEL] };
 
+/** What a change answers: what was done, from its own input, typed like any answer. */
+export const CHANGED: Shape = {
+  coded: 'boolean',
+  linesSet: 'boolean',
+  commented: 'boolean',
+  declined: 'boolean',
+  approved: 'boolean',
+  linked: 'boolean',
+  expenseId: 'id',
+  categoryId: 'id',
+  labelIds: ['id'],
+  lines: 'number',
+  total: 'number',
+  vendorId: 'id',
+  externalId: 'text',
+  source: 'text',
+};
+
 /** A vendor: name, company number, address and its link to the accounting system. No website, no bank details. */
 export const VENDOR: Shape = {
   id: 'id',
   teamVendorId: 'id',
   name: 'text',
-  identification: 'code',
+  identification: 'taxId',
   email: 'text',
   address: 'text',
   postal: 'code',
