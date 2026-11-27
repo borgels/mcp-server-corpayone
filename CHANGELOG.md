@@ -16,6 +16,14 @@ review:
   parameters are known (Akamai `hdnts`/`hdntl`, `Expires`, `Policy`, Google
   `X-Goog-`, `hmac`, `key`, `code` and others). A link still encoded after four
   rounds of decoding is removed.
+- Ids are kept as they are: a resource id (`id`, `…Id`, `…_id`) and a UUID in
+  a text are never taken for a bank or card number. An IBAN must have its
+  country's length.
+- Below an account, bank, card, payee or beneficiary object, no number is
+  passed on at any depth; `cvv2`, `cvc2` and dotted names such as
+  `account.number` are left out.
+- A 12-digit card number is found; HTML character references, percent-encoded
+  and relative links are looked through; Imgix's `s` signature is known.
 
 ## 1.3.0
 

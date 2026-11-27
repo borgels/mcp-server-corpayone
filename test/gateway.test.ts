@@ -257,7 +257,7 @@ describe('calls', () => {
         data: { id: 'V1', name: 'A', iban: 'DK5000400440116243', bankAccount: { regNumber: '1234' }, logo: 'https://files.example/a.png' },
       },
       'GET /external/v3/expenses/E1': {
-        data: { ...OWN_EXPENSE.data, note: 'Invoice: https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K attached; pay to IBAN DK5000400440116243, card 4111 1111 1111 1111, order 987654321098', attachments: [{ id: 'A1', url: 'https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K' }] },
+        data: { ...OWN_EXPENSE.data, note: 'Invoice: https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K attached; pay to IBAN DK5000400440116243, card 4111 1111 1111 1111, order 987654321097', attachments: [{ id: 'A1', url: 'https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K' }] },
       },
     });
     const gw = gateway(impl);
@@ -265,7 +265,7 @@ describe('calls', () => {
     expect(vendor.structuredContent).toEqual({ data: { id: 'V1', name: 'A', logo: 'https://files.example/a.png' } });
     const expense = await gw.callTool('get_expense', { expenseId: 'E1' });
     expect(JSON.stringify(expense)).not.toContain('Signature');
-    expect(JSON.stringify(expense)).toContain('Invoice: [signed link removed] attached; pay to IBAN [bank or card number removed], card [bank or card number removed], order 987654321098');
+    expect(JSON.stringify(expense)).toContain('Invoice: [signed link removed] attached; pay to IBAN [bank or card number removed], card [bank or card number removed], order 987654321097');
   });
 
   it('scrubs every answer, also the team name in the connection check', async () => {
@@ -277,6 +277,22 @@ describe('calls', () => {
           accountNo: '12345678',
           bankAccountNo: '12345678',
           account: { number: '12345678' },
+          acct: { details: { number: '87654321' } },
+          'account.number': '22334455',
+          cvv2: '123',
+          cvc2: '456',
+          payee: { reference: '33445566' },
+          uuid: '9ff6e103-1fb4-41ed-be17-8ae66ab1877b',
+          vendorId: '9ff6e103-1fb4-41ed-be17-8ae66ab1877b',
+          pan12: 'PAN 501800000009',
+          pan12n: 501800000009,
+          entity: '<a href="https://files.example/i.pdf?sig&#61;abc">file</a>',
+          encoded: 'https%3A%2F%2Ffiles.example%2Fi.pdf%3Fsig%3Dabc',
+          relative: '/invoice.pdf?sig=abc',
+          imgix: 'https://example.imgix.net/invoice.pdf?s=e277f90a8d8f26a7a94942c435c5cdf3',
+          bankruptcyStatus: 'none',
+          accounting: { number: 4000 },
+          report: 'https://example.test/report?code=DKK',
           url: "https://files.example/bob's.pdf?Expires=2000000000&Signature=abc",
           gb29nwbk60161331926819: 3, card: 4111111111111111, big: 6221234567890598594, small: 42, '4111111111111111': 1, 'https://x.example/a?Signature=abc': 2 },
       },
@@ -291,6 +307,13 @@ describe('calls', () => {
     for (const piece of ['0440', '4111', '%73ig', 'NWBK', '5555', '9876', '3456789012', 'sig=abcdef', '1331926819', '1234567890', '622123', '22334455', '66778899', '55443322', '12345678', 'Signature', 'hmac', 'Key-Pair']) {
       expect(company).not.toContain(piece);
     }
+    for (const piece of ['87654321', '33445566', '501800000009', 'sig&#61;abc', 'sig%3Dabc', 'sig=abc', 's=e277f90a', '"cvv2"', '"cvc2"']) expect(company).not.toContain(piece);
+    // Ids, ordinary fields and ordinary links are kept as they are.
+    expect(company).toContain('"uuid":"9ff6e103-1fb4-41ed-be17-8ae66ab1877b"');
+    expect(company).toContain('"vendorId":"9ff6e103-1fb4-41ed-be17-8ae66ab1877b"');
+    expect(company).toContain('"bankruptcyStatus":"none"');
+    expect(company).toContain('"accounting":{"number":4000}');
+    expect(company).toContain('https://example.test/report?code=DKK');
     // Letters and digits that fail the IBAN check are kept.
     expect(company).toContain('ab12cdefghijklmnop');
     expect(company).toContain('"small":42');
