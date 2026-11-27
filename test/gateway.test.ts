@@ -306,7 +306,20 @@ describe('calls', () => {
           trailing: 'card 501800000009 0',
           labels: 'Account number is 12345678 og Pay to Account No: 12/34/567890',
           slashes: '/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a',
-          plain: 'https://public.example/report?Expires=never',
+          plain: 'https://public.example/report.pdf',
+          bareDownload: 'download?sig=abcdef',
+          dotSlash: './file?sig=abcdef',
+          nested: 'files/invoice.pdf?sig=abcdef',
+          fiveTimes: '%2525252568ttps%252525253A%252525252F%252525252Ffiles.example%252525252Fi%252525253Fsig%252525253Dabc',
+          imagekit: 'https://ik.imagekit.io/demo/private.jpg?ik-s=abcdef&ik-t=9999999999',
+          bankRoutingNumber: '021000021',
+          cardSecurityCode: '123',
+          creditCard: { number: '12345678' },
+          beneficiary: { number: '12/34/567890' },
+          slashedCard: '4111/1111/1111/1111',
+          spaced: 'Account number:         12345678',
+          htmlPan: '&#52;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;',
+
           url: "https://files.example/bob's.pdf?Expires=2000000000&Signature=abc",
           gb29nwbk60161331926819: 3, card: 4111111111111111, big: 6221234567890598594, small: 42, '4111111111111111': 1, 'https://x.example/a?Signature=abc': 2 },
       },
@@ -324,19 +337,34 @@ describe('calls', () => {
     for (const piece of ['87654321', '33445566', '501800000009', 'sig&#61;abc', 'sig%3Dabc', 'sig=abc', 's=e277f90a', '"cvv2"', '"cvc2"', 'sig%253D', '123456789', '021000021', 'DK5000400440116243', '567890']) {
       expect(company).not.toContain(piece);
     }
-    expect(company).toContain('https://public.example/report?Expires=never');
+    expect(company).toContain('https://public.example/report.pdf');
+    for (const piece of ['sig=abcdef', 'ik-s', '021000021', '"cardSecurityCode"', '"creditCard":{"number"', '567890', '4111/1111', '         12345678', '&#52;&#49;', 'sig%252525253D']) {
+      expect(company).not.toContain(piece);
+    }
+
     // Ids, ordinary fields and ordinary links are kept as they are.
     expect(company).toContain('"uuid":"9ff6e103-1fb4-41ed-be17-8ae66ab1877b"');
     expect(company).toContain('"vendorId":"9ff6e103-1fb4-41ed-be17-8ae66ab1877b"');
     expect(company).toContain('"bankruptcyStatus":"none"');
     expect(company).toContain('"accounting":{"number":4000}');
-    expect(company).toContain('https://example.test/report?code=DKK');
+    // Any link with a query that sets a value is removed: the names of signing keys cannot all be known.
+    expect(company).not.toContain('report?code=DKK');
     // Letters and digits that fail the IBAN check are kept.
     expect(company).toContain('ab12cdefghijklmnop');
     expect(company).toContain('"small":42');
     // An error that quotes the input is scrubbed too.
     const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'https://x.example/a?Signature=abc': 1 }));
     expect(invalid).not.toContain('Signature');
+  });
+
+  it('keeps ids as they are, in the data and in the text alike', async () => {
+    const { impl } = stub({ 'GET /external/v1/teams/team-own': { data: { id: '4111111111111111', labelIds: ['label-4111111111111111'], cardId: '4111111111111111' } } });
+    const result = await gateway(impl).callTool('get_company', {});
+    const data = (result.structuredContent as { data: Record<string, unknown> }).data;
+    expect(data.id).toBe('4111111111111111');
+    expect(data.labelIds).toEqual(['label-4111111111111111']);
+    expect(data.cardId).toBe('[bank or card number removed]');
+    expect(result.content[0]!.text).toContain('"id":"4111111111111111"');
   });
 
   it('keeps the text and the data of an answer the same, ids included', async () => {

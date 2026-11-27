@@ -2,37 +2,27 @@
 
 ## 1.3.1
 
-Harder scrubbing in the embeddable gateway (`./gateway`), after an independent
-review:
+The embeddable gateway (`./gateway`) scrubs bank and card data and links with a
+key by broad rules instead of lists of known formats, after an independent
+review of 1.3.0:
 
-- Account numbers under more field names (`accountNo`, `bankAccountNo`, any
-  `bank*` field, `card`) and as the `number` of an `account`, `bank` or `card`
-  object are left out.
-- Account numbers named in text are found with more labels ("Konto nr.",
-  "Account (DKK):", "A/C").
-- IBANs and card numbers grouped with dots or any kind of dash are found.
-- A field that is a link as a whole is checked whole, also with an apostrophe
-  in its path; links without a scheme (`//host/...`) are checked; more signing
-  parameters are known (Akamai `hdnts`/`hdntl`, `Expires`, `Policy`, Google
-  `X-Goog-`, `hmac`, `key`, `code` and others). A link still encoded after four
-  rounds of decoding is removed.
-- Ids are kept as they are: a resource id (`id`, `…Id`, `…_id`) and a UUID in
-  a text are never taken for a bank or card number. An IBAN must have its
-  country's length.
-- Below an account, bank, card, payee or beneficiary object, no number is
-  passed on at any depth; `cvv2`, `cvc2` and dotted names such as
-  `account.number` are left out.
-- A 12-digit card number is found, also inside a longer run of digits; HTML
-  character references, percent-encoded (also twice) and relative links,
-  including a bare file name with a query, are looked through; Imgix's `s`
-  signature is known. `Expires` alone does not make a link signed.
-- More field names are left out: plurals (`bankAccountNumbers`), routing,
-  transit and clearing codes, `bsb` and `aba`. An id under a bank, card or
-  account name, or one of digits only, is scrubbed as any text.
-- Labelled account numbers with "is" and slashes ("Account number is …",
-  "Account No: 12/34/567890") are found, in bounded patterns.
-- A successful result's text is made from its scrubbed data, so both say the
-  same, ids included.
+- Any link or word with a query that sets a value (`?x=y`, also HTML- or
+  percent-encoded any number of times, with or without a scheme or host) is
+  removed: signed links put their key in the query, and the names providers use
+  cannot all be known. A link without such a query is kept.
+- Fields whose names speak of a bank, a card, an account number, a routing,
+  clearing or sort code, a security code or a payment instruction are left out,
+  under any spelling (`accountNo`, `bankRoutingNumber`, `account.number`,
+  `cvv2`, …). Below an account, bank, card, payee or beneficiary object, no
+  number is passed on at any depth.
+- In text (with HTML references written out first): IBANs by their country's
+  length and check digits, card numbers (12 to 19 digits passing Luhn, anywhere
+  in a run of digits grouped by spaces, dots, slashes or dashes) and numbers
+  named as an account ("Konto nr.", "Account number is …", "A/C") are removed.
+  All patterns run in linear time.
+- Resource ids (`id`, `…Id`, `…Ids`, `…_id`, under a name that speaks of no
+  bank, card or account) are kept as they are, and a successful result's text is
+  made from its scrubbed data, so both say the same.
 
 ## 1.3.0
 
