@@ -91,8 +91,8 @@ const SIGNED = /Signature=|X-Amz-|Key-Pair-Id=|[?&]sig=|[?&]token=/i;
 export const SIGNED_LINK_REMOVED = '[signed link removed]';
 /** An IBAN in a text: country code, check digits and 11 to 30 more letters or digits, in groups or not. */
 const IBAN = /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30}\b/g;
-/** A run of 13 or more digits, in groups or not: it holds a card number when part of it passes the Luhn check. */
-const CARD = /\b\d(?:[ -]?\d){12,}\b/g;
+/** A run of 13 or more digits, in groups or not and whatever stands next to it: it holds a card number when part of it passes the Luhn check. */
+const CARD = /\d(?:[ -]?\d){12,}/g;
 export const NUMBER_REMOVED = '[bank or card number removed]';
 
 /** Whether a run of digits passes the Luhn check, as every card number does. */
@@ -143,6 +143,8 @@ export function scrub(value: unknown, depth = 0): unknown {
   const out: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
     if (HIDDEN_FIELD.test(key.toLowerCase().replace(/[-_\s]/g, ''))) continue;
+    // A key that holds a number or a link the texts may not hold is left out with its value.
+    if (scrubText(key) !== key) continue;
     const kept = scrub(entry, depth + 1);
     if (kept !== undefined) out[key] = kept;
   }

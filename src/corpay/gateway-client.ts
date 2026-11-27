@@ -214,7 +214,12 @@ export class CorpayGatewayClient {
     }
     this.admitIssued(token);
     const next = answer?.refresh_token;
-    if (typeof next === 'string' && next !== this.refreshToken && /^[\x21-\x7e]{16,8192}$/.test(next)) {
+    if (next !== undefined && next !== null && next !== this.refreshToken) {
+      // A new token may already have retired the old one: if it cannot be kept as it came, nothing more is sent.
+      if (typeof next !== 'string' || !/^[\x21-\x7e]{16,8192}$/.test(next)) {
+        this.stopped = true;
+        throw new Error(NOT_KEPT);
+      }
       this.admitIssued(next);
       // Corpay One may already have retired the old token. Until the host has kept the new one, nothing else is sent;
       // if it cannot, this client sends nothing more at all (a new instance starts from what the host has kept).

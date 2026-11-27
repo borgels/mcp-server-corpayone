@@ -144,6 +144,15 @@ describe('calls', () => {
     expect(calls.some(call => call.url.includes('/external/'))).toBe(false);
   });
 
+  it('sends nothing when a renewed token cannot be kept as it came', async () => {
+    const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () =>
+      json({ access_token: 'access-token-value-1234567890', refresh_token: 'new-short-token' }),
+    );
+    const result = await gateway(impl, { onRefreshToken: () => undefined }).callTool('check_connection', {});
+    expect(result.isError).toBe(true);
+    expect(calls.some(call => call.url.includes('/external/'))).toBe(false);
+  });
+
   it('says that the access was refused when the token is no longer accepted', async () => {
     const { impl } = stub({}, () => json({ error: 'invalid_grant', secret: REFRESH }, 400));
     const result = await gateway(impl).callTool('list_expenses', {});
@@ -238,13 +247,16 @@ describe('calls', () => {
     const name = 'Firma https://x.example/a?Signature=abc IBAN DK5000400440116243 4111 1111 1111 1111 123, 4111111111111111999 og 12 5555 5555 5555 4444, 41111111111111119999 og 94111111111111111 slut';
     const { impl } = stub({
       'GET /external/v1/teams': { data: { teams: [{ id: TEAM, name }] } },
-      'GET /external/v1/teams/team-own': { data: { name: 'A', card: 4111111111111111, small: 42 } },
+      'GET /external/v1/teams/team-own': {
+        data: { name: 'A PAN4111111111111111 og 4111111111111111USD', card: 4111111111111111, small: 42, '4111111111111111': 1, 'https://x.example/a?Signature=abc': 2 },
+      },
     });
     const gw = gateway(impl);
     const text = JSON.stringify(await gw.callTool('check_connection', {}));
     for (const piece of ['Signature', 'DK5000400440116243', '4111 1111', '41111111', '5555 5555']) expect(text).not.toContain(piece);
     const company = JSON.stringify(await gw.callTool('get_company', {}));
     expect(company).not.toContain('4111111111111111');
+    expect(company).not.toContain('Signature');
     expect(company).toContain('"small":42');
     // An error that quotes the input is scrubbed too.
     const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'https://x.example/a?Signature=abc': 1 }));
