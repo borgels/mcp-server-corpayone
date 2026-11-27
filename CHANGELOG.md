@@ -22,8 +22,8 @@ its tools are unchanged.
   length with something after its colon (`https:`, `mailto:x`, `sms:1234`,
   `webcal:x`), a host name in any script (`t.co`, `example.com`,
   `customer.finance`, `faktura.pdf`, `xn--…`; a host name with a path
-  whatever it ends in), an IPv4 address (also with leading zeros or as a hex
-  number, and with a port), an IPv6 address with or without brackets, a query
+  whatever it ends in), an IPv4 address (also with leading zeros, hex parts
+  or as a hex number, and with a port), an IPv6 address with or without brackets, a query
   (`?a=b`) or a path (`localhost/x`, `127.1/x`; also `faktura/kreditnota`,
   where a part between slashes is longer than four letters). Full-width and
   ideographic dots count as dots. A few listed abbreviations (`Reg.nr.`,
@@ -32,7 +32,9 @@ its tools are unchanged.
   slash such as `A/S`, `kr/md` and `27/11/2026`, stay, and so do times (`12:34:56`) and plain numbers
   (`127.1`), which are no links without a scheme, `//` or a path. In an
   error, links are removed whole before secrets are redacted. A link split
-  by a tab or a line break (`https:<tab>//host`) is removed whole too.
+  by a tab or a line break (`https:<tab>//host`, `webcal:<line break>…`) is
+  removed whole too, by `//`, `www.` or a known scheme; any other word and a
+  colon at the end of a line (`Note:`) is no link.
 - An answer's text is built from its final, scrubbed data, so the text and
   `structuredContent` always say the same. This holds for error answers too, and
   replaces the `[signed link removed]` marker of 1.3. The scan is linear in

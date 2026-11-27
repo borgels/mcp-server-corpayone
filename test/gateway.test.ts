@@ -827,3 +827,13 @@ describe('typed answers: link removal across line breaks stays linear', () => {
     }
   });
 });
+
+describe('typed answers: the edges, eleventh round', () => {
+  it('removes a known scheme split by a line break or a tab, and IPv4 with hex parts', async () => {
+    const value = 'A webcal:\nPRIVAT_KALENDER B sms:\t12345678 C 1.2.3.0xff D 0x7f.0.0.1 E Bemærk:\nBetal F 1.240,50 kr.';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'A [link removed] B [link removed] C [link removed] D [link removed] E Bemærk:\nBetal F 1.240,50 kr.' }] });
+    expect(JSON.stringify(result)).not.toContain('PRIVAT');
+  });
+});

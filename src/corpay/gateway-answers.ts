@@ -44,7 +44,9 @@ const IPV6 = /\[[0-9A-Za-z.%]*:[0-9A-Za-z:.%]*\]/;
 /** An IPv6 address without brackets: "::", or three colons or more with hex digits between ("2001:db8:0:0:0:0:0:1"). */
 const IPV6_BARE = /^[^0-9A-Fa-f:]*(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?:%[0-9A-Za-z]+)?[^0-9A-Za-z:]*$/;
 /** Four groups of digits with dots between, also with leading zeros ("0177.0.0.1"), or a hex number ("0x7f000001"). */
-const IPV4_OTHER = /^(?:\d{1,4}\.){3}\d{1,4}$|^0x[0-9A-Fa-f]{1,8}$/;
+const IPV4_OTHER = /^(?:(?:0x[0-9A-Fa-f]*|\d+)\.){3}(?:0x[0-9A-Fa-f]*|\d+)$|^0x[0-9A-Fa-f]{1,8}$/i;
+/** Two to four dotted parts of which one is a hex number ("0x7f.1", "1.2.3.0xff"): an IPv4 address, no amount. */
+const IPV4_HEX_PART = /^(?:(?:0x[0-9A-Fa-f]*|\d+)\.){1,3}(?:0x[0-9A-Fa-f]*|\d+)$/i;
 
 /**
  * Whether a part of a word between slashes is short and plain, so no path: four letters or digits at most, in one run,
@@ -82,9 +84,9 @@ function isLink(original: string, joined = false): boolean {
   // Read as a browser would: full-width and ideographic dots are dots, compatibility forms their plain ones.
   const word = original.normalize('NFKC').replace(/[\u3002\uff0e\uff61]/g, '.');
   if (word.includes('//') || word.toLowerCase().includes('www.')) return true;
-  // Words joined across a line break are a link by "//", "www." or a special scheme only: "Note:<line break>Please"
+  // Words joined across a line break are a link by "//", "www." or a known scheme only: "Note:<line break>Please"
   // and "Betalt.<line break>Tak" are no links.
-  if (joined) return SPECIAL_SCHEME.test(word);
+  if (joined) return KNOWN_SCHEME.test(word);
   if (SCHEME.test(word)) return true;
   // A query ("?name=value"), or an IPv6 literal ("[::1]").
   if (QUERY.test(word) || IPV6.test(word)) return true;
@@ -141,6 +143,7 @@ function isIpSpelling(word: string): boolean {
   while (to > from && /[^\p{L}\p{N}:%]/u.test(word[to - 1]!)) to -= 1;
   const core = word.slice(from, to);
   if (IPV4_OTHER.test(core)) return true;
+  if (IPV4_HEX_PART.test(core) && /0x/i.test(core)) return true;
   // An IPv4 address in any spelling with a port: "127.1:8080", "0x7f000001:8080" (a time has no dot: "12:34").
   if (/^(?:\d+(?:\.\d+){1,3}|0x[0-9A-Fa-f]+|\d+):\d{1,5}$/.test(core) && !/^\d{1,2}:\d{2}$/.test(core)) return true;
   if (!IPV6_BARE.test(core)) return false;
@@ -152,7 +155,7 @@ function isIpSpelling(word: string): boolean {
 export function removeLinks(text: string): string {
   return text.replace(WIDE_WORD, wide => {
     // A browser drops tabs and line breaks inside a link ("https:<tab>//host"): a run of words joined by them is one
-    // link when, joined, it reads as one ("//", "www." or a special scheme such as "https:").
+    // link when, joined, it reads as one ("//", "www." or a known scheme such as "https:" or "webcal:").
     if (/[\t\n\r]/.test(wide) && isLink(wide.replace(/[\t\n\r]+/g, ''), true)) return LINK_REMOVED;
     return wide.replace(WORD, word => (isLink(word) ? LINK_REMOVED : word));
   });
@@ -160,8 +163,21 @@ export function removeLinks(text: string): string {
 
 /** Words with only tabs and line breaks between them: what a browser could read as one link. */
 const WIDE_WORD = /\S+(?:[\t\n\r]+\S+)*/g;
-/** A scheme a browser reads as a link also without "//" after its colon ("https:host"). */
-const SPECIAL_SCHEME = /(?:^|[^A-Za-z0-9+.-])(?:https?|ftp|wss?|file|mailto|javascript|vbscript|data|blob):/i;
+/**
+ * The schemes of links in use (the special ones, and the registered ones seen in mail, calendars, phones and apps):
+ * words joined across a tab or a line break are a link when they hold one ("webcal:<line break>…"). Any other word
+ * and a colon at the end of a line is no link ("Note:<line break>Please").
+ */
+const KNOWN_SCHEME = new RegExp(
+  `(?:^|[^A-Za-z0-9+.-])(?:${[
+    'https?', 'ftps?', 'sftp', 'wss?', 'file', 'mailto', 'tel', 'sms', 'mms', 'fax', 'callto', 'skype', 'facetime(?:-audio)?',
+    'webcal', 'data', 'blob', 'javascript', 'vbscript', 'about', 'chrome', 'ldaps?', 'ssh', 'telnet', 'git', 'svn',
+    'ircs?', 'magnet', 'xmpp', 'sips?', 'geo', 'maps', 'news', 'nntp', 'feed', 'rtsp', 'rtmp', 'smb', 'nfs', 'afp',
+    'spotify', 'slack', 'zoommtg', 'msteams', 'intent', 'market', 'itms(?:-apps)?', 'whatsapp', 'tg', 'viber', 'bitcoin',
+    'ethereum', 'urn', 'ms-[a-z-]+', 'outlook', 'onenote', 'vnc', 'rdp', 'view-source', 'cid', 'mid', 'im', 'jar',
+  ].join('|')}):`,
+  'i',
+);
 
 /** A free text as it is passed on: links removed, then the pattern scrub as an extra guard. */
 export type TextScrub = (text: string) => string;
