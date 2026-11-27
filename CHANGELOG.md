@@ -6,10 +6,18 @@ The embeddable gateway (`./gateway`) scrubs bank and card data and links with a
 key by broad rules instead of lists of known formats, after an independent
 review of 1.3.0:
 
-- Any link or word with a query that sets a value (`?x=y`, also HTML- or
-  percent-encoded any number of times, with or without a scheme or host) is
-  removed: signed links put their key in the query, and the names providers use
-  cannot all be known. A link without such a query is kept.
+- Every link is removed (any scheme, a `//` host or `www.`, also HTML- or
+  percent-encoded any number of times), and so is every word with a query that
+  sets a value (`?x=y`): a signed link may carry its key in its query or in its
+  path, and the forms providers use cannot all be known. The marker is now
+  `[link removed]` (`LINK_REMOVED`; `SIGNED_LINK_REMOVED` is kept as an alias).
+- A text that is JSON is scrubbed as data. HTML references (also nested, and
+  `&nbsp;` and other spaces and dashes) are written out before numbers are
+  looked for. Labels in quotes or with "is" and card expiry dates are found.
+- Field names are split at acronyms too (`CARDDetails`); `CID` is left out;
+  routing, clearing and transit codes are matched as whole names, so
+  `transitionId` is kept. Below money objects, any text with four digits in a
+  row is left out.
 - Fields whose names speak of a bank, a card, an account number, a routing,
   clearing or sort code, a security code or a payment instruction are left out,
   under any spelling (`accountNo`, `bankRoutingNumber`, `account.number`,

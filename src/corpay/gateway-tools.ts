@@ -89,10 +89,10 @@ const shortText = (max: number) => z.string().trim().min(1).max(max);
  * - A field whose name speaks of a bank, a card, an account number, a routing or clearing code, a security code or a
  *   payment instruction is left out. Below an account, a bank, a card, a payee or a beneficiary, no number is passed on
  *   at any depth.
- * - Any link or word with a query that sets a value ("?x=y", also HTML- or percent-encoded, with or without a scheme or
- *   a host) is removed: signed links put their key in the query, and the names providers use for it cannot all be known.
- *   A link without such a query is kept.
- * - In text, IBANs (by country length and check digits), card numbers (12 to 19 digits that pass the Luhn check,
+ * - Every link (any scheme, a "//" host or "www.", also HTML- or percent-encoded) and every word with a query that sets
+ *   a value ("?x=y") is removed: a signed link may carry its key in its query or in its path, and the forms providers use
+ *   cannot all be known.
+ * - A text that is JSON is scrubbed as data. In text (HTML references written out first, also nested), IBANs (by country length and check digits), card numbers (12 to 19 digits that pass the Luhn check,
  *   anywhere in a run of digits with any separators) and numbers named as an account are removed.
  * - A resource's id (`id`, `…Id`, `…_id`, under a name that speaks of no bank, card or account) is kept as it is, so the
  *   tools can address it again.
@@ -100,7 +100,7 @@ const shortText = (max: number) => z.string().trim().min(1).max(max);
 
 /** Field names (lower case, without separators) that speak of bank or card data: such a field is left out. */
 const HIDDEN_NAME =
-  /(iban|bban|bic$|swift|routing|sortcode|clearing|transit|bsb$|^aba$|cvv|cvc|cvn|csc|securitycode|verificationvalue|verificationcode|expiry|expiration|expdate|cardnumber|cardno|creditcard|debitcard|^cards?$|^pans?$|bankaccount|bankdetail|bankinfo|bankdata|banknumber|bankno|banknr|bankcode|bankreg|^bank$|^banks$|accountnumber|accountno|accountnr|^accounts?$|^acct|kontonummer|kontonr|^konto$|registrationnumber|registreringsnummer|^reg(no|nr|number)|paymentinstruction|paymentmethod|paymentdetail)/;
+  /(iban|bban|bic$|swift|routing(no|nr|number|code)?s?$|^routing|sortcode|clearing(no|nr|number|code)?$|^transit(no|nr|number|code)?$|bsb$|^aba$|^cid$|cvv|cvc|cvn|csc|securitycode|verificationvalue|verificationcode|expiry|expiration|expdate|cardnumber|cardno|creditcard|debitcard|^cards?$|^pans?$|bankaccount|bankdetail|bankinfo|bankdata|banknumber|bankno|banknr|bankcode|bankreg|^bank$|^banks$|accountnumber|accountno|accountnr|^accounts?$|^acct|kontonummer|kontonr|^konto$|registrationnumber|registreringsnummer|^reg(no|nr|number)|paymentinstruction|paymentmethod|paymentdetail)/;
 /** The words of a name that speak of money held somewhere: an account, a bank, a card, a payee, a beneficiary. */
 const MONEY_WORDS: ReadonlySet<string> = new Set(['bank', 'banks', 'card', 'cards', 'account', 'accounts', 'acct', 'konto', 'payee', 'beneficiary', 'iban', 'pan', 'creditcard', 'debitcard', 'bankaccount']);
 /** Names that speak of accounting, not of money held somewhere: the exact names, nothing more. */
@@ -109,6 +109,7 @@ const NOT_MONEY: ReadonlySet<string> = new Set(['accounting', 'accounttype', 'ac
 function wordsOf(name: string): string[] {
   return name
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter(word => word !== '');
@@ -127,7 +128,10 @@ const DIGITS = new RegExp(`^${SEP}*\\d(?:${SEP}*\\d)*${SEP}*$`);
 const ID_KEY = /^(ids?|[a-z][A-Za-z0-9]*Ids?|[a-z][a-z0-9_]*_ids?)$/;
 const ID_VALUE = /^[A-Za-z0-9_-]{1,100}$/;
 
-export const SIGNED_LINK_REMOVED = '[signed link removed]';
+/** What stands where a link was: every link is removed, since any of them may carry a key. */
+export const LINK_REMOVED = '[link removed]';
+/** The earlier name of LINK_REMOVED. */
+export const SIGNED_LINK_REMOVED = LINK_REMOVED;
 export const NUMBER_REMOVED = '[bank or card number removed]';
 /** Where an IBAN may start: a country code and check digits, in capitals or not, whatever stands before it. */
 const IBAN_START = /[A-Z]{2}\d{2}/gi;
@@ -137,12 +141,14 @@ const IBAN_REST = new RegExp(`^(?:${SEP}*[A-Z0-9]){11,30}`, 'i');
 const CARD = new RegExp(`\\d(?:${SEP}*\\d){11,}`, 'g');
 /** A number named as an account or a sort code: "Reg.nr. 1234", "Konto 1234567890", "Account number is 12-34-56". */
 const LABELLED_ACCOUNT = new RegExp(
-  `\\b(reg(?:istrerings)?\\.?\\s*(?:nr|no)\\.?|registreringsnummer|konto(?:\\s*(?:nr\\.?|nummer|no\\.?))?|account(?:\\s*(?:no\\.?|number|nr\\.?|#))?|a\\/c(?:\\s*no\\.?)?|acct\\.?(?:\\s*no\\.?)?|sort\\s*code|routing(?:\\s*(?:no\\.?|number|code))?|bsb|aba)((?:\\s*\\([A-Z]{3}\\))?[\\s\\u00a0:#.=\\-\\u2010-\\u2015\\u2212]*(?:(?:is|er)[\\s\\u00a0:]+)?)\\d(?:${SEP}*\\d){3,}`,
+  `\\b(reg(?:istrerings)?\\.?\\s*(?:nr|no)\\.?|registreringsnummer|konto(?:\\s*(?:nr\\.?|nummer|no\\.?))?|account(?:\\s*(?:no\\.?|number|nr\\.?|#))?|a\\/c(?:\\s*no\\.?)?|acct\\.?(?:\\s*no\\.?)?|sort\\s*code|routing(?:\\s*(?:no\\.?|number|code))?|bsb|aba)((?:\\s*\\([A-Z]{3}\\))?[\\s\\u00a0:#.=\\-\\u2010-\\u2015\\u2212"'\\u201c\\u201d]*(?:(?:is|er|was|var)[\\s\\u00a0:"'\\u201c\\u201d]+)?)\\d(?:${SEP}*\\d){3,}`,
   'gi',
 );
 
 /** A card's security code named in text: "CVV: 123", "CVC2 456", "security code 1234". */
-const SECURITY_CODE = /\b(cvv2?|cvc2?|cvn|csc|cid|security\s*code|sikkerhedskode|kontrolcifre)([\s\u00a0:#.=\-]*)\d{3,4}\b/gi;
+const SECURITY_CODE = /\b(cvv2?|cvc2?|cvn|csc|cid|security\s*code|sikkerhedskode|kontrolcifre)([\s\u00a0:#.=\-"']*(?:(?:is|er)[\s\u00a0:"']+)?)\d{3,4}\b/gi;
+/** A card's expiry named in text: "Expiry: 12/28", "exp. 12-2028", "udløb 12/28". */
+const EXPIRY = /\b(expiry|expiration|exp\.?|udløb(?:sdato)?|gyldig til)([\s\u00a0:#.=\-"']*(?:(?:is|er)[\s\u00a0:"']+)?)\d{1,2}\s*[/.\-]\s*\d{2,4}\b/gi;
 
 /** Whether a run of digits passes the Luhn check, as every card number does. */
 function luhn(digits: string): boolean {
@@ -219,7 +225,11 @@ function withoutIbans(value: string): string {
   return out + value.slice(from);
 }
 
-const NAMED_ENTITIES: Readonly<Record<string, string>> = { amp: '&', equals: '=', quest: '?', sol: '/', colon: ':', num: '#', percnt: '%', semi: ';', lt: '<', gt: '>', quot: '"', apos: "'" };
+const NAMED_ENTITIES: Readonly<Record<string, string>> = {
+  amp: '&', equals: '=', quest: '?', sol: '/', colon: ':', num: '#', percnt: '%', semi: ';', lt: '<', gt: '>', quot: '"', apos: "'",
+  nbsp: '\u00a0', ensp: ' ', emsp: ' ', thinsp: ' ', numsp: ' ', puncsp: ' ', hairsp: ' ', tab: '\t', newline: '\n',
+  period: '.', comma: ',', hyphen: '-', dash: '-', ndash: '-', mdash: '-', minus: '-', lpar: '(', rpar: ')', plus: '+', excl: '!',
+};
 
 /** A text with its HTML character references written out: numeric ones and the named ones a link's syntax uses. */
 function htmlDecoded(text: string): string {
@@ -249,21 +259,52 @@ function holdsQuery(word: string): boolean {
   return true;
 }
 
-/** A word (no spaces, quotes or angle brackets) with a query that sets a value: removed whole. */
+/** Whether a word is a link to somewhere: a scheme and "//", a "//" host, or "www.", also once decoded. */
+function isLink(word: string): boolean {
+  let text = word;
+  for (let round = 0; round < 8; round += 1) {
+    if (/^[a-z][a-z0-9+.-]*:\/\/|\/\/[a-z0-9-]|^www\./i.test(text) || /:\/\//.test(text)) return true;
+    const decoded = htmlDecoded(text).replace(/%([0-9a-f]{2})/gi, (_whole, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    if (decoded === text) return false;
+    text = decoded;
+  }
+  return true;
+}
+
+/**
+ * A text without links and without words with a query that sets a value. A link may carry its key anywhere (in the
+ * query, or in its path, as Cloudinary's signed links do), so every link is removed, signed or not; and a browser drops
+ * tabs and line breaks inside a link, so the text is looked at with them dropped too.
+ */
 function withoutQueries(value: string): string {
   return value
     .split(/([\s"<>]+)/)
-    .map(part => (part.length > 1 && holdsQuery(part) ? SIGNED_LINK_REMOVED : part))
+    .map(part => (part.length > 1 && (isLink(part) || holdsQuery(part)) ? SIGNED_LINK_REMOVED : part))
     .join('');
 }
 
 /** A text with links that carry a query, IBANs, named account numbers and card numbers removed. */
-function scrubText(original: string): string {
-  // HTML character references are written out first, so nothing hides behind them.
-  const value = htmlDecoded(original);
+function scrubText(original: string, depth = 0): string {
+  // A text that is JSON is scrubbed as data, field names and all, and written out again.
+  const trimmed = original.trim();
+  if (depth < 4 && (trimmed.startsWith('{') || trimmed.startsWith('[')) && trimmed.length <= 1_000_000) {
+    try {
+      return JSON.stringify(scrub(JSON.parse(trimmed), depth + 1));
+    } catch {
+      // Not JSON: a text as any other.
+    }
+  }
+  // HTML character references are written out first (also nested), so nothing hides behind them.
+  let value = original;
+  for (let round = 0; round < 8; round += 1) {
+    const decoded = htmlDecoded(value);
+    if (decoded === value) break;
+    value = decoded;
+  }
   return withoutIbans(withoutQueries(value))
     .replace(LABELLED_ACCOUNT, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(SECURITY_CODE, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
+    .replace(EXPIRY, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(CARD, run => (holdsCardNumber(run) ? NUMBER_REMOVED : run));
 }
 
@@ -272,8 +313,8 @@ export function scrub(value: unknown, depth = 0, key = '', inMoney = false): unk
   if (depth > 64) return undefined;
   if (typeof value === 'string') {
     if (ID_KEY.test(key) && !namesMoney(key) && !inMoney && ID_VALUE.test(value)) return value;
-    if (inMoney && DIGITS.test(value)) return undefined;
-    return scrubText(value);
+    if (inMoney && (DIGITS.test(value) || /\d(?:[\s\u00a0./\-]*\d){3}/.test(value))) return undefined;
+    return scrubText(value, depth);
   }
   if (Array.isArray(value)) return value.map(entry => scrub(entry, depth + 1, key, inMoney)).filter(entry => entry !== undefined);
   if (typeof value === 'number') {

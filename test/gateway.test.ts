@@ -263,10 +263,10 @@ describe('calls', () => {
     });
     const gw = gateway(impl);
     const vendor = await gw.callTool('get_vendor', { vendorId: 'V1' });
-    expect(vendor.structuredContent).toEqual({ data: { id: 'V1', name: 'A', logo: 'https://files.example/a.png' } });
+    expect(vendor.structuredContent).toEqual({ data: { id: 'V1', name: 'A', logo: '[link removed]' } });
     const expense = await gw.callTool('get_expense', { expenseId: 'E1' });
     expect(JSON.stringify(expense)).not.toContain('Signature');
-    expect(JSON.stringify(expense)).toContain('Invoice: [signed link removed] attached; pay to IBAN [bank or card number removed], card [bank or card number removed], order 987654321097');
+    expect(JSON.stringify(expense)).toContain('Invoice: [link removed] attached; pay to IBAN [bank or card number removed], card [bank or card number removed], order 987654321097');
   });
 
   it('scrubs every answer, also the team name in the connection check', async () => {
@@ -321,6 +321,15 @@ describe('calls', () => {
           spaced: 'Account number:         12345678',
           htmlPan: '&#52;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;',
           perHex: 'https://x.example/a%25%33%46sig%25%33%44abcdef',
+          nbspNumbers: 'GB29&nbsp;NWBK&nbsp;6016&nbsp;1331&nbsp;9268&nbsp;19; 4111&nbsp;1111&nbsp;1111&nbsp;1111',
+          newline: 'https://files.example/invoice.pdf?si\ng=abcdef',
+          cloudinary: 'https://res.cloudinary.com/demo/image/authenticated/s--iDy_JeBq--/c_fill,w_300/sample.png',
+          quoted: 'Account number: "12345678"; CVV is 123; Expiry: 12/28',
+          jsonText: '{"accountNumber":"12345678","cvv":"123"}',
+          CARDDetails: { number: '12345678', code: '123' },
+          CID: '1234',
+          beneficiaryAccount: { number: '12345678 DKK' },
+          transitionId: 'T1',
           nestedHtml: 'https://x/a&amp;amp;amp;#63;sig&amp;amp;amp;#61;abc',
           dashLabel: 'Account number - 12345678',
           cardVerificationValue: '123',
@@ -346,7 +355,12 @@ describe('calls', () => {
     for (const piece of ['87654321', '33445566', '501800000009', 'sig&#61;abc', 'sig%3Dabc', 'sig=abc', 's=e277f90a', '"cvv2"', '"cvc2"', 'sig%253D', '123456789', '021000021', 'DK5000400440116243', '567890']) {
       expect(company).not.toContain(piece);
     }
-    expect(company).toContain('https://public.example/report.pdf');
+    // Every link is removed, signed or not: a key may stand anywhere in one.
+    expect(company).not.toContain('public.example');
+    for (const piece of ['6016', 'iDy_JeBq', 'si\\ng', '"CARDDetails":{"number"', '"CID"', '12345678 DKK', 'CVV is 123', '12/28', 'accountNumber']) {
+      expect(company).not.toContain(piece);
+    }
+    expect(company).toContain('"transitionId":"T1"');
     for (const piece of ['sig%25%33%44', 'amp;#61', '"cardVerificationValue"', '"expiryMonth"', '"code":"123"', 'CVV: 123', '"accountingBank":{"number"']) {
       expect(company).not.toContain(piece);
     }

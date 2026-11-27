@@ -259,7 +259,10 @@ await gateway.callTool('list_expenses', { state: 'Awaiting' }, { caller: 'user-1
   the bill for payment).
 - Changes run directly when the policy enables writes. There is no
   prepare/commit step in the gateway: the host decides who may change what.
-- Answers leave out bank and card numbers and signed attachment links; errors
+- Answers leave out bank and card data (by field name, below account, bank
+  and card objects, and IBANs, card numbers and named account numbers in text)
+  and every link, since a signed one may carry its key anywhere; ids are kept
+  as they are. Errors
   are fixed texts by HTTP status, with `failure: { httpStatus, requestId }`.
 - Secrets must be printable ASCII of at least 16 characters; nothing that
   leaves an instance holds a piece of one.
