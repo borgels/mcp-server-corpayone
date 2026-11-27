@@ -1,5 +1,30 @@
 # Changelog
 
+## 1.4.0
+
+Typed answers in the embeddable gateway (`./gateway`). The MCP server and its
+tools are unchanged.
+
+- Each gateway tool passes on only the fields it knows: an allow-list per
+  answer type (team, expense, expense in a list, activity, approver,
+  category, label list, vendor). A field that is not listed is left out,
+  whatever its name or value. No bank or card field is in any list: payment
+  methods, creditors, payment instructions and bank accounts never leave.
+- Every value is checked for its kind: an id, a code, a date, a number or
+  true/false that is not of its form is left out, and so is an id or a code
+  that holds an account or card number or a host name.
+- Links are never passed on: attachment URLs, websites and logos are not
+  listed, and any link in a free text is replaced by `[link removed]`.
+- The pattern scrub of bank and card numbers stays on free text, as an extra
+  guard.
+- A change answers with what was done, built from its own input (for
+  example `{ approved: true, expenseId }`), never Corpay One's body; a new
+  vendor is answered with the vendors Corpay One names, typed.
+- Answer shapes change: `get_company`, `get_expense` and `get_vendor` give the
+  record itself; `list_expenses` gives `{ total, offset, count, bills }`; the
+  activities, approvers and vendors come as `{ activities }`, `{ approvers }`
+  and `{ vendors }`.
+
 ## 1.3.0
 
 The embeddable gateway (`./gateway`) is rebuilt for hosts that serve several

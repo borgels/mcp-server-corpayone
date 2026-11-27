@@ -1,5 +1,6 @@
 import { z } from 'zod/v4';
 import type { GatewayQueryValue, GatewayWriteMethod } from './gateway-client.js';
+import { ACTIVITY, APPROVER, CATEGORY, dataOf, EXPENSE, EXPENSE_IN_LIST, LABEL_LIST, project, TEAM, VENDOR, type Shape } from './gateway-answers.js';
 
 /** What a tool may use of the client: reads, and (for a write tool) changes. */
 export interface GatewayClientView {
@@ -9,8 +10,12 @@ export interface GatewayClientView {
 
 /**
  * The tools of the embedded gateway (src/gateway.ts): narrow inputs, one
- * company (team) per instance, and every answer scrubbed of bank and card
- * numbers and of signed attachment links before it leaves.
+ * company (team) per instance, and typed answers: each tool passes on only the
+ * fields it knows (an allow-list per answer type, src/corpay/gateway-answers.ts),
+ * with no bank or card field in any list and every link removed. A change
+ * answers with what was done, built from its own input, never Corpay's body.
+ * The pattern scrub of bank and card numbers stays on free text as an extra
+ * guard.
  *
  * Reads: the team, expenses (bills, receipts, credit notes) with their
  * activity log and approvers, the coding vocabulary and vendors.
@@ -228,6 +233,30 @@ export function scrub(value: unknown, depth = 0): unknown {
   return out;
 }
 
+/** A page's counts. */
+const PAGE: Shape = { total: 'number', offset: 'number', count: 'number' };
+/** A vendor's link to the accounting system, as asked for. */
+const LINKED: Shape = { vendorId: 'id', externalId: 'text', source: 'text' };
+
+/** An answer typed by its shape: links removed from free text, then the pattern scrub as an extra guard. */
+export function typed(value: unknown, shape: Shape): unknown {
+  return project(value, shape, scrubText);
+}
+
+/**
+ * The list in an answer: the answer itself when it is one, its `data` when that is one, or the named field of the
+ * answer or of its `data`. An empty list when none is there.
+ */
+function listIn(answer: unknown, name: string): unknown[] {
+  if (Array.isArray(answer)) return answer;
+  if (!isRecord(answer)) return [];
+  if (Array.isArray(answer[name])) return answer[name] as unknown[];
+  const data = answer.data;
+  if (Array.isArray(data)) return data;
+  if (isRecord(data) && Array.isArray(data[name])) return data[name] as unknown[];
+  return [];
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -318,7 +347,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
       const team = teams.find(entry => isRecord(entry) && entry.id === context.teamId);
       return {
         teamFound: team !== undefined,
-        team: isRecord(team) ? { id: context.teamId, name: typeof team.name === 'string' ? team.name : null } : null,
+        team: isRecord(team) ? { id: context.teamId, name: typeof team.name === 'string' ? typed(team.name, 'text') : null } : null,
       };
     },
   },
@@ -331,7 +360,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     upstream: [get('/v1/teams/{teamId}')],
     input: {},
     async run(client, _input, context) {
-      return scrub(await client.get(teamPath(context.teamId)));
+      return typed(dataOf(await client.get(teamPath(context.teamId)), 'team'), TEAM) ?? {};
     },
   },
   {
@@ -360,7 +389,13 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
         Offset: input.offset as number | undefined,
         Count: (input.count as number | undefined) ?? 25,
       };
-      return scrub(await client.get('/v2/expenses', query));
+      const answer = await client.get<unknown>('/v2/expenses', query);
+      const page = isRecord(answer) ? answer : {};
+      const data = dataOf(answer);
+      return {
+        ...(typed({ total: page.total, offset: page.offset, count: page.count }, PAGE) as object),
+        bills: typed(isRecord(data) ? data.bills : data, [EXPENSE_IN_LIST]) ?? [],
+      };
     },
   },
   {
@@ -372,7 +407,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     upstream: [get('/v3/expenses/{expenseId}')],
     input: { expenseId: id },
     async run(client, input, context) {
-      return scrub(await expenseInTeam(client, String(input.expenseId), context.teamId));
+      return typed(await expenseInTeam(client, String(input.expenseId), context.teamId), EXPENSE) ?? {};
     },
   },
   {
@@ -386,7 +421,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, input, context) {
       const expenseId = String(input.expenseId);
       await expenseInTeam(client, expenseId, context.teamId);
-      return scrub(await client.get(`/v2/expenses/${encodeURIComponent(expenseId)}/activities`));
+      const answer = await client.get<unknown>(`/v2/expenses/${encodeURIComponent(expenseId)}/activities`);
+      return { activities: typed(listIn(answer, 'activities'), [ACTIVITY]) };
     },
   },
   {
@@ -400,7 +436,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, input, context) {
       const expenseId = String(input.expenseId);
       await expenseInTeam(client, expenseId, context.teamId);
-      return scrub(await client.get(`/v2/expenses/${encodeURIComponent(expenseId)}/approvers`));
+      const answer = await client.get<unknown>(`/v2/expenses/${encodeURIComponent(expenseId)}/approvers`);
+      return { approvers: typed(listIn(answer, 'approvers'), [APPROVER]) };
     },
   },
   {
@@ -415,18 +452,15 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, _input, context) {
       const base = teamPath(context.teamId);
       const [categories, lists] = await Promise.all([client.get<unknown>(`${base}/categories`), client.get<unknown>(`${base}/lists`)]);
-      const catData = isRecord(categories) && isRecord(categories.data) ? categories.data.categories : undefined;
-      const listData = isRecord(lists) && isRecord(lists.data) ? lists.data.lists : undefined;
-      const summaries = Array.isArray(listData) ? listData.filter(isRecord) : [];
+      const summaries = listIn(lists, 'lists').filter(isRecord);
       const withLabels = [];
       for (const list of summaries.slice(0, 50)) {
         const listId = typeof list.id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(list.id) ? list.id : undefined;
         if (!listId) continue;
         const labels = await client.get<unknown>(`${base}/lists/${encodeURIComponent(listId)}/labels`);
-        const labelData = isRecord(labels) && isRecord(labels.data) ? (labels.data.labels ?? labels.data) : labels;
-        withLabels.push({ id: listId, name: list.name ?? null, type: list.type ?? null, labels: labelData ?? [] });
+        withLabels.push({ ...list, labels: listIn(labels, 'labels') });
       }
-      return scrub({ categories: Array.isArray(catData) ? catData : [], lists: withLabels });
+      return { categories: typed(listIn(categories, 'categories'), [CATEGORY]), lists: typed(withLabels, [LABEL_LIST]) };
     },
   },
   {
@@ -441,12 +475,11 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
       count: z.number().int().min(1).max(100).optional(),
     },
     async run(client, input, context) {
-      return scrub(
-        await client.get(`/v2/teams/${encodeURIComponent(context.teamId)}/vendors`, {
-          Offset: input.offset as number | undefined,
-          Count: input.count as number | undefined,
-        }),
-      );
+      const answer = await client.get<unknown>(`/v2/teams/${encodeURIComponent(context.teamId)}/vendors`, {
+        Offset: input.offset as number | undefined,
+        Count: input.count as number | undefined,
+      });
+      return { vendors: typed(listIn(answer, 'vendors'), [VENDOR]) };
     },
   },
   {
@@ -458,7 +491,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     upstream: [get('/v2/teams/{teamId}/vendors/{vendorId}')],
     input: { vendorId: id },
     async run(client, input, context) {
-      return scrub(await client.get(`/v2/teams/${encodeURIComponent(context.teamId)}/vendors/${encodeURIComponent(String(input.vendorId))}`));
+      const answer = await client.get<unknown>(`/v2/teams/${encodeURIComponent(context.teamId)}/vendors/${encodeURIComponent(String(input.vendorId))}`);
+      return typed(dataOf(answer, 'vendor'), VENDOR) ?? {};
     },
   },
   {
@@ -485,8 +519,13 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
       // Corpay refuses `add` on a field that holds a value and `replace` on one that does not.
       if (input.categoryId !== undefined) patch.push({ op: has(current.category) ? 'replace' : 'add', path: '/categoryId', value: input.categoryId });
       if (input.labelIds !== undefined) patch.push({ op: has(current.labels) ? 'replace' : 'add', path: '/labels', value: input.labelIds });
-      const answer = await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}`, patch, 'application/json-patch+json');
-      return scrub(answer ?? { updated: true });
+      await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}`, patch, 'application/json-patch+json');
+      return {
+        coded: true,
+        expenseId,
+        ...(input.categoryId !== undefined ? { categoryId: input.categoryId } : {}),
+        ...(input.labelIds !== undefined ? { labelIds: input.labelIds } : {}),
+      };
     },
   },
   {
@@ -520,8 +559,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
         ...(line.categoryId !== undefined ? { category: line.categoryId } : {}),
         labels: line.labels ?? [],
       }));
-      const answer = await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/amountlines`, { amountLines: lines });
-      return scrub(answer ?? { updated: true });
+      await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/amountlines`, { amountLines: lines });
+      return { linesSet: true, expenseId, lines: lines.length, total: lines.reduce((sum, line) => sum + line.amount, 0) };
     },
   },
   {
@@ -535,8 +574,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, input, context) {
       const expenseId = String(input.expenseId);
       await expenseInTeam(client, expenseId, context.teamId);
-      const answer = await client.send('POST', `/v2/expenses/${encodeURIComponent(expenseId)}/activities`, { body: input.comment, type: 'Text' });
-      return scrub(answer ?? { added: true });
+      await client.send('POST', `/v2/expenses/${encodeURIComponent(expenseId)}/activities`, { body: input.comment, type: 'Text' });
+      return { commented: true, expenseId };
     },
   },
   {
@@ -563,7 +602,10 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, input, context) {
       const vendor = Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
       if (typeof vendor.country === 'string') vendor.country = vendor.country.toUpperCase();
-      return scrub((await client.send('POST', `/v2/teams/${encodeURIComponent(context.teamId)}/vendors`, { vendors: [vendor] })) ?? { created: true });
+      const answer = await client.send<unknown>('POST', `/v2/teams/${encodeURIComponent(context.teamId)}/vendors`, { vendors: [vendor] });
+      // Corpay's answer is passed on only as the vendors it names, typed; without one, what was asked for, typed too.
+      const named = typed(listIn(answer, 'vendors'), [VENDOR]) as unknown[];
+      return { created: true, vendors: named.length > 0 ? named : typed([vendor], [VENDOR]) };
     },
   },
   {
@@ -576,7 +618,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     input: { vendorId: id, externalId: shortText(100), source: shortText(50) },
     async run(client, input, context) {
       const path = `/v2/teams/${encodeURIComponent(context.teamId)}/vendors/${encodeURIComponent(String(input.vendorId))}/external-id`;
-      return scrub((await client.send('PATCH', path, { externalId: input.externalId, source: input.source })) ?? { updated: true });
+      await client.send('PATCH', path, { externalId: input.externalId, source: input.source });
+      return { linked: true, ...(typed({ vendorId: input.vendorId, externalId: input.externalId, source: input.source }, LINKED) as object) };
     },
   },
   {
@@ -590,7 +633,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, input, context) {
       const expenseId = String(input.expenseId);
       await expenseInTeam(client, expenseId, context.teamId);
-      return scrub((await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/decline`, { note: input.note })) ?? { declined: true });
+      await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/decline`, { note: input.note });
+      return { declined: true, expenseId };
     },
   },
   {
@@ -606,7 +650,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, input, context) {
       const expenseId = String(input.expenseId);
       await expenseInTeam(client, expenseId, context.teamId);
-      return scrub((await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/approve`)) ?? { approved: true });
+      await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/approve`);
+      return { approved: true, expenseId };
     },
   },
 ];

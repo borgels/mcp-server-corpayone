@@ -28,8 +28,10 @@ export { WEBHOOK_EVENTS } from './corpay/catalog.js';
 /**
  * Embeddable entry point (package export `./gateway`): an embedding host,
  * such as an MCP gateway that does its own per-user authorization, lists
- * `tools` and invokes `callTool`. The tools, their inputs and how their
- * answers are scrubbed live in src/corpay/gateway-tools.ts.
+ * `tools` and invokes `callTool`. The tools and their inputs live in
+ * src/corpay/gateway-tools.ts, and the typed answers (an allow-list of fields
+ * per answer type) in src/corpay/gateway-answers.ts. The pattern scrub below
+ * is an extra guard on top.
  *
  * One instance per company (Corpay One team). Several instances can run in
  * one process. Each instance uses only what the host passes: the app's
@@ -367,7 +369,7 @@ function buildCorpayGateway(options: Partial<CorpayGatewayOptions>, credentials:
         throw error;
       }
       await writeGatewayAuditEvent({ tool: name, action: 'finish', target, status: 'ok' });
-      // Every answer is scrubbed here as well, whatever the tool did: no bank or card number and no signed link leaves.
+      // Every answer is scrubbed here as well, on top of its type, whatever the tool did: no bank or card number and no signed link leaves.
       return jsonResult(tool.summary, redactDeep(redactDeep(scrub(data), redactor), redactor));
     } catch (error) {
       return errorResult(redactText(error instanceof Error ? error.message : String(error), redactor), failureMetadata(error));

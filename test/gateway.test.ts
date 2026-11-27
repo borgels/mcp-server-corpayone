@@ -257,15 +257,16 @@ describe('calls', () => {
         data: { id: 'V1', name: 'A', iban: 'DK5000400440116243', bankAccount: { regNumber: '1234' }, logo: 'https://files.example/a.png' },
       },
       'GET /external/v3/expenses/E1': {
-        data: { ...OWN_EXPENSE.data, note: 'Invoice: https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K attached; pay to IBAN DK5000400440116243, card 4111 1111 1111 1111, order 987654321098', attachments: [{ id: 'A1', url: 'https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K' }] },
+        data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value: 'Invoice: https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K attached; pay to IBAN DK5000400440116243, card 4111 1111 1111 1111, order 987654321098' }], attachments: [{ id: 'A1', url: 'https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K' }] },
       },
     });
     const gw = gateway(impl);
     const vendor = await gw.callTool('get_vendor', { vendorId: 'V1' });
-    expect(vendor.structuredContent).toEqual({ data: { id: 'V1', name: 'A', logo: 'https://files.example/a.png' } });
+    expect(vendor.structuredContent).toEqual({ id: 'V1', name: 'A' });
     const expense = await gw.callTool('get_expense', { expenseId: 'E1' });
     expect(JSON.stringify(expense)).not.toContain('Signature');
-    expect(JSON.stringify(expense)).toContain('Invoice: [signed link removed] attached; pay to IBAN [bank or card number removed], card [bank or card number removed], order 987654321098');
+    expect(expense.structuredContent).toMatchObject({ attachments: [{ id: 'A1' }] });
+    expect(JSON.stringify(expense)).toContain('Invoice: [link removed] attached; pay to IBAN [bank or card number removed], card [bank or card number removed], order 987654321098');
   });
 
   it('scrubs every answer, also the team name in the connection check', async () => {
@@ -286,7 +287,8 @@ describe('calls', () => {
     for (const piece of ['0440', '4111', '%73ig', 'NWBK', '5555', '9876', '3456789012', 'sig=abcdef', '1331926819', '1234567890', '622123']) expect(company).not.toContain(piece);
     // Letters and digits that fail the IBAN check are kept.
     expect(company).toContain('ab12cdefghijklmnop');
-    expect(company).toContain('"small":42');
+    // Fields the team's answer type does not list are left out, whatever they hold.
+    for (const field of ['small', 'card', 'big']) expect(company).not.toContain(`"${field}"`);
     // An error that quotes the input is scrubbed too.
     const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'https://x.example/a?Signature=abc': 1 }));
     expect(invalid).not.toContain('Signature');
@@ -357,4 +359,144 @@ describe('renewal', () => {
       expect(calls.some(call => call.url.includes('/external/'))).toBe(false);
     });
   }
+});
+
+describe('typed answers', () => {
+  const BANK = 'DK5000400440116243';
+  const FULL_EXPENSE = {
+    data: {
+      id: 'E1',
+      owner: { user: { id: 'U1' }, team: { id: TEAM } },
+      number: 1042,
+      amount: 1240000,
+      currency: 'DKK',
+      dueDate: '2026-12-01T00:00:00Z',
+      state: 'Awaiting',
+      reference: 'Faktura 77 se www.example.com/f',
+      paymentMethod: { id: 'P1', type: 'BankTransfer', iban: BANK },
+      creditor: { id: 'CR1', accountNumber: '12345678' },
+      ripePaymentId: 'R1',
+      fx: { homeAmount: 1240000, homeCurrency: 'DKK', paymentInstructionType: 'Iban' },
+      attachments: [{ id: 'A1', url: 'https://attachments.example/a.pdf', isOriginal: true }],
+      lines: [{ id: 'L1', amount: 1240000, note: 'Se https://x.example/l', bankAccount: BANK }],
+      vendor: { id: 'V1', name: 'Leverandør A/S', iban: BANK, website: 'https://leverandoer.example' },
+      unknownNew: 'value',
+      number2: 4111111111111111,
+    },
+  };
+
+  it('passes on only the listed fields of an expense: no payment method, creditor, payment instruction or link', async () => {
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': FULL_EXPENSE });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toEqual({
+      id: 'E1',
+      owner: { user: { id: 'U1' }, team: { id: TEAM } },
+      number: 1042,
+      amount: 1240000,
+      currency: 'DKK',
+      dueDate: '2026-12-01T00:00:00Z',
+      state: 'Awaiting',
+      reference: 'Faktura 77 se [link removed]',
+      fx: { homeAmount: 1240000, homeCurrency: 'DKK' },
+      attachments: [{ id: 'A1', isOriginal: true }],
+      lines: [{ id: 'L1', amount: 1240000, note: 'Se [link removed]' }],
+      vendor: { id: 'V1', name: 'Leverandør A/S' },
+    });
+    for (const piece of [BANK, 'paymentMethod', 'creditor', 'ripePaymentId', 'paymentInstructionType', 'http', 'unknownNew', '4111']) {
+      expect(JSON.stringify(result)).not.toContain(piece);
+    }
+  });
+
+  it('leaves out a value that is not of its kind', async () => {
+    const { impl } = stub({
+      'GET /external/v3/expenses/E1': {
+        data: {
+          id: 'E1',
+          owner: { team: { id: TEAM } },
+          amount: '12,00',
+          currency: 'https://x.example',
+          dueDate: 'snart',
+          number: 'NaN',
+          category: { id: 'id med mellemrum', number: '4111111111111111' },
+          vendor: { id: 'DK5000400440116243', name: 'Leverandør A/S' },
+          item: { id: 4111111111111111, name: 'Vare' },
+          type: 'www.example.com',
+        },
+      },
+    });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toEqual({ id: 'E1', owner: { team: { id: TEAM } }, category: {}, vendor: { name: 'Leverandør A/S' }, item: { name: 'Vare' } });
+  });
+
+  it('types every read: expenses, activities, approvers, coding options and vendors', async () => {
+    const vendor = { id: 'V1', name: 'Leverandør A/S', identification: '12345678', website: 'https://leverandoer.example', iban: BANK, bankAccounts: [{ number: BANK }] };
+    const { impl } = stub({
+      'GET /external/v2/expenses': { total: 1, offset: 0, count: 25, data: { bills: [{ ...FULL_EXPENSE.data, attachments: undefined }] } },
+      'GET /external/v3/expenses/E1': FULL_EXPENSE,
+      'GET /external/v2/expenses/E1/activities': {
+        activities: [{ activityType: 'Text', body: `Betal til ${BANK} via https://pay.example`, userId: 'U1', created: '2026-11-20T10:00:00Z', link: 'https://x.example' }],
+      },
+      'GET /external/v2/expenses/E1/approvers': [{ id: 'U2', email: 'a@example.com' }],
+      'GET /external/v1/teams/team-own/categories': { data: { categories: [{ id: 'C1', name: 'Varekøb', number: '1310', color: '#fff' }] } },
+      'GET /external/v1/teams/team-own/lists': { data: { lists: [{ id: 'LS1', name: 'Projekter', type: 'Custom', onBills: true }] } },
+      'GET /external/v1/teams/team-own/lists/LS1/labels': { data: { labels: [{ id: 'LB1', value: 'Projekt 7', listId: 'LS1', secret: 'x' }] } },
+      'GET /external/v2/teams/team-own/vendors': { data: [vendor] },
+    });
+    const gw = gateway(impl);
+    const list = await gw.callTool('list_expenses', {});
+    expect(list.structuredContent).toMatchObject({
+      total: 1,
+      offset: 0,
+      count: 25,
+      bills: [{ id: 'E1', amount: 1240000, vendor: { id: 'V1', name: 'Leverandør A/S' } }],
+    });
+    const activities = await gw.callTool('get_expense_activities', { expenseId: 'E1' });
+    expect(activities.structuredContent).toEqual({
+      activities: [{ activityType: 'Text', body: 'Betal til [bank or card number removed] via [link removed]', userId: 'U1', created: '2026-11-20T10:00:00Z' }],
+    });
+    expect((await gw.callTool('get_expense_approvers', { expenseId: 'E1' })).structuredContent).toEqual({ approvers: [{ id: 'U2' }] });
+    expect((await gw.callTool('list_coding_options', {})).structuredContent).toEqual({
+      categories: [{ id: 'C1', name: 'Varekøb', number: '1310' }],
+      lists: [{ id: 'LS1', name: 'Projekter', type: 'Custom', labels: [{ id: 'LB1', value: 'Projekt 7', listId: 'LS1' }] }],
+    });
+    const vendors = await gw.callTool('list_vendors', {});
+    expect(vendors.structuredContent).toEqual({ vendors: [{ id: 'V1', name: 'Leverandør A/S', identification: '12345678' }] });
+    for (const result of [list, activities, vendors]) {
+      for (const piece of [BANK, 'http', 'paymentMethod', 'website']) expect(JSON.stringify(result)).not.toContain(piece);
+    }
+  });
+
+  it("answers a change with what was done, built from its own input, never Corpay's body", async () => {
+    const echo = { data: { id: 'E1', iban: BANK, url: 'https://x.example/signed?Signature=abc', paymentMethod: { iban: BANK } } };
+    const { impl } = stub({
+      'GET /external/v3/expenses/E1': OWN_EXPENSE,
+      'PATCH /external/v2/expenses/E1': echo,
+      'PATCH /external/v2/expenses/E1/amountlines': echo,
+      'POST /external/v2/expenses/E1/activities': echo,
+      'PATCH /external/v2/expenses/E1/decline': echo,
+      'PATCH /external/v2/expenses/E1/approve': echo,
+      'PATCH /external/v2/teams/team-own/vendors/V1/external-id': echo,
+      'POST /external/v2/teams/team-own/vendors': { data: [{ id: 'V9', name: 'Ny A/S', iban: BANK, website: 'https://ny.example' }] },
+    });
+    const gw = gateway(impl);
+    const answers = {
+      coded: await gw.callTool('set_expense_coding', { expenseId: 'E1', categoryId: 'C1' }),
+      lines: await gw.callTool('set_expense_amount_lines', { expenseId: 'E1', amountLines: [{ amount: 600 }, { amount: 400 }] }),
+      comment: await gw.callTool('comment_on_expense', { expenseId: 'E1', comment: 'Tjek' }),
+      declined: await gw.callTool('decline_expense', { expenseId: 'E1', note: 'Forkert' }),
+      approved: await gw.callTool('approve_expense', { expenseId: 'E1' }),
+      linked: await gw.callTool('set_vendor_external_id', { vendorId: 'V1', externalId: '2001', source: 'e-conomic' }),
+      created: await gw.callTool('create_vendor', { name: 'Ny A/S', website: 'https://ny.example' }),
+    };
+    expect(answers.coded.structuredContent).toEqual({ coded: true, expenseId: 'E1', categoryId: 'C1' });
+    expect(answers.lines.structuredContent).toEqual({ linesSet: true, expenseId: 'E1', lines: 2, total: 1000 });
+    expect(answers.comment.structuredContent).toEqual({ commented: true, expenseId: 'E1' });
+    expect(answers.declined.structuredContent).toEqual({ declined: true, expenseId: 'E1' });
+    expect(answers.approved.structuredContent).toEqual({ approved: true, expenseId: 'E1' });
+    expect(answers.linked.structuredContent).toEqual({ linked: true, vendorId: 'V1', externalId: '2001', source: 'e-conomic' });
+    expect(answers.created.structuredContent).toEqual({ created: true, vendors: [{ id: 'V9', name: 'Ny A/S' }] });
+    for (const result of Object.values(answers)) {
+      for (const piece of [BANK, 'http', 'Signature', 'paymentMethod']) expect(JSON.stringify(result)).not.toContain(piece);
+    }
+  });
 });
