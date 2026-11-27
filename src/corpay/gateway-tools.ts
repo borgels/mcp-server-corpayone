@@ -174,9 +174,9 @@ const LABELLED_ACCOUNT = new RegExp(
 );
 
 /** A card's security code named in text: "CVV: 123", "CVC2 456", "security code 1234". */
-const SECURITY_CODE = /\b(cvv2?|cvc2?|cvn|csc|cid|security\s*code|sikkerhedskode|kontrolcifre)([\s\u00a0:#.=\-"']*(?:(?:is|er)[\s\u00a0:"']+)?)\d(?:[\s\u00a0.\-]?\d){2,3}\b/gi;
+const SECURITY_CODE = /\b((?:cvv2?|cvc2?|cvn|csc|cid)(?:\s*(?:code|kode|number|nr|no)\.?)?|security\s*code|sikkerhedskode|kontrolcifre)([\s\u00a0:#.=\-"']*(?:(?:is|er)[\s\u00a0:"']+)?)\d(?:[\s\u00a0.\-]?\d){2,3}\b/gi;
 /** A card's expiry named in text: "Expiry: 12/28", "exp. 12-2028", "udløb 12/28". */
-const EXPIRY = /\b(expiry|expiration|exp\.?|udløb(?:sdato)?|gyldig til)([\s\u00a0:#.=\-"']*(?:(?:is|er)[\s\u00a0:"']+)?)(?:\d{1,2}\s*[/.\-]\s*\d{2,4}|\d{4}\s*[/.\-]\s*\d{1,2})\b/gi;
+const EXPIRY = /\b((?:expiry|expiration|exp\.?)(?:\s*(?:date|dato))?|udløb(?:sdato)?|gyldig til)([\s\u00a0:#.=\-"']*(?:(?:is|er)[\s\u00a0:"']+)?)(?:\d{1,2}\s*[/.\-]\s*\d{2,4}|\d{4}\s*[/.\-]\s*\d{1,2})\b/gi;
 
 /** Whether a run of digits passes the Luhn check, as every card number does. */
 function luhn(digits: string): boolean {
@@ -280,19 +280,32 @@ function holdsQuery(word: string): boolean {
   for (let round = 0; round < 8; round += 1) {
     const question = text.indexOf('?');
     if (question >= 0 && text.indexOf('=', question + 1) > question) return true;
-    const decoded = htmlDecoded(text).replace(/%([0-9a-f]{2})/gi, (_whole, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    const decoded = percentDecoded(htmlDecoded(text));
     if (decoded === text) return false;
     text = decoded;
   }
   return true;
 }
 
+/** A text with its percent-encoding written out as UTF-8, and a sequence that is not UTF-8 byte by byte. */
+function percentDecoded(text: string): string {
+  return text.replace(/(?:%[0-9a-f]{2})+/gi, run => {
+    try {
+      return decodeURIComponent(run);
+    } catch {
+      return run.replace(/%([0-9a-f]{2})/gi, (_whole, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    }
+  });
+}
+
 /** Whether a word is a link to somewhere: a scheme and "//", a "//" host, or "www.", also once decoded. */
 function isLink(word: string): boolean {
   let text = word;
   for (let round = 0; round < 8; round += 1) {
-    if (/:\/\/|\/\/[a-z0-9-]|(?:^|[^a-z0-9])www\./i.test(text)) return true;
-    const decoded = htmlDecoded(text).replace(/%([0-9a-f]{2})/gi, (_whole, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    // As a browser reads it: backslashes are slashes, and "https:/host" is "https://host".
+    const read = text.replace(/\\/g, '/');
+    if (/:\/\/|\/\/[a-z0-9-]|(?:^|[^a-z0-9])www\.|(?:^|[^a-z0-9])(?:https?|ftp):\//i.test(read)) return true;
+    const decoded = percentDecoded(htmlDecoded(text));
     if (decoded === text) return false;
     text = decoded;
   }
@@ -323,25 +336,31 @@ function withoutQueries(value: string): string {
 }
 
 /** A text with links that carry a query, IBANs, named account numbers and card numbers removed. */
-function scrubText(original: string, depth = 0, inMoney = false): string {
-  // A text that is JSON is scrubbed as data, field names and all, and written out again.
-  const trimmed = original.trim();
-  if (depth < 4 && (trimmed.startsWith('{') || trimmed.startsWith('[')) && trimmed.length <= 1_000_000) {
-    try {
-      return JSON.stringify(scrub(JSON.parse(trimmed), depth + 1, '', inMoney));
-    } catch {
-      // Not JSON: a text as any other.
+function scrubText(original: string, depth = 0, inMoney = false, jsonBudget = 8): string {
+  // JSON in a text (all of it, or from its first brace or bracket to its last) is scrubbed as data, field names and all,
+  // and written out again. Its own budget: a text inside JSON inside a text is parsed too, up to eight levels.
+  if (jsonBudget > 0 && original.length <= 1_000_000) {
+    const start = original.search(/[{[]/);
+    const end = Math.max(original.lastIndexOf('}'), original.lastIndexOf(']'));
+    if (start >= 0 && end > start) {
+      try {
+        const data = JSON.parse(original.slice(start, end + 1)) as unknown;
+        const inner = JSON.stringify(scrubJson(data, inMoney, jsonBudget - 1));
+        return scrubText(original.slice(0, start), depth, inMoney, 0) + inner + scrubText(original.slice(end + 1), depth, inMoney, 0);
+      } catch {
+        // Not JSON: a text as any other.
+      }
     }
   }
   // Links and queries are found on the text as it came; then HTML references and percent-encoding are written out (also
   // nested) and HTML tags taken away, so no number hides behind them or is split by them.
   let value = withoutQueries(original);
   for (let round = 0; round < 8; round += 1) {
-    const decoded = htmlDecoded(value).replace(/%([0-9a-f]{2})/gi, (_whole, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+    const decoded = percentDecoded(htmlDecoded(value));
     if (decoded === value) break;
     value = decoded;
   }
-  value = withoutQueries(value.replace(/<\/?[a-z][^<>]{0,500}>/gi, ''));
+  value = withoutQueries(withoutComments(value).replace(/<\/?[a-z][^<>]{0,500}>/gi, ''));
   return withoutIbans(value)
     .replace(LABELLED_ACCOUNT, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(SECURITY_CODE, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
@@ -349,17 +368,34 @@ function scrubText(original: string, depth = 0, inMoney = false): string {
     .replace(CARD, run => (holdsCardNumber(run) ? NUMBER_REMOVED : run));
 }
 
+/** A text without HTML comments ("<!-- … -->"), found by position, in linear time. An open one runs to the end. */
+function withoutComments(text: string): string {
+  let out = '';
+  let from = 0;
+  for (let open = text.indexOf('<!--'); open >= 0; open = text.indexOf('<!--', from)) {
+    out += text.slice(from, open);
+    const close = text.indexOf('-->', open + 4);
+    if (close < 0) return out;
+    from = close + 3;
+  }
+  return out + text.slice(from);
+}
+
 /** A copy of Corpay's answer with bank and card data and links with a query left out, as described above. */
-export function scrub(value: unknown, depth = 0, key = '', inMoney = false): unknown {
+function scrubJson(value: unknown, inMoney: boolean, jsonBudget: number): unknown {
+  return scrub(value, 0, '', inMoney, jsonBudget);
+}
+
+export function scrub(value: unknown, depth = 0, key = '', inMoney = false, jsonBudget = 8): unknown {
   if (depth > 64) return undefined;
   if (typeof value === 'string') {
     // A resource's id is kept, also below a payee (a vendor's id there addresses the vendor), unless its own name
     // speaks of money.
     if (ID_KEY.test(key) && !namesMoney(key) && ID_VALUE.test(value)) return value;
-    if (inMoney && (DIGITS.test(value) || /\d(?:[\s\u00a0./\-]*\d){3}/.test(value))) return undefined;
-    return scrubText(value, depth, inMoney);
+    if (inMoney && /\d/.test(value)) return undefined;
+    return scrubText(value, depth, inMoney, jsonBudget);
   }
-  if (Array.isArray(value)) return value.map(entry => scrub(entry, depth + 1, key, inMoney)).filter(entry => entry !== undefined);
+  if (Array.isArray(value)) return value.map(entry => scrub(entry, depth + 1, key, inMoney, jsonBudget)).filter(entry => entry !== undefined);
   if (typeof value === 'number') {
     if (ID_KEY.test(key) && !namesMoney(key) && Number.isSafeInteger(value)) return value;
     if (inMoney) return undefined;
@@ -377,7 +413,7 @@ export function scrub(value: unknown, depth = 0, key = '', inMoney = false): unk
     // A key that holds a number or a link the texts may not hold is left out with its value.
     if (scrubText(name) !== name) continue;
     const money = inMoney || (namesMoney(name) && !ID_KEY.test(name));
-    const kept = scrub(entry, depth + 1, name, money);
+    const kept = scrub(entry, depth + 1, name, money, jsonBudget);
     if (kept !== undefined) out[name] = kept;
   }
   return out;

@@ -26,6 +26,12 @@ review of 1.3.0:
   follows a tab or line break inside a link is removed with it. Security codes
   with spaced digits and year-first expiry dates are found. A resource id is
   kept also below a payee.
+- JSON inside a text, also after other words and at any depth of the answer,
+  is parsed (up to eight levels of JSON in JSON). Links are read as a browser
+  reads them (backslashes, `https:/host`). HTML comments are taken away before
+  numbers are looked for; percent-encoding is decoded as UTF-8. Labels such as
+  "CVV code" and "Expiry date" are found. Below money objects, every text with
+  a digit is left out.
 - Fields whose names speak of a bank, a card, an account number, a routing,
   clearing or sort code, a security code or a payment instruction are left out,
   under any spelling (`accountNo`, `bankRoutingNumber`, `account.number`,

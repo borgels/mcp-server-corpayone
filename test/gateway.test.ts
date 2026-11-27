@@ -339,6 +339,15 @@ describe('calls', () => {
           splitLink: 'https://files.example/a?sig=\nabcdef',
           separated: 'CVV: 1 2 3; Expiry: 2028-12',
           payeeIds: { payee: { id: '24681357', vendorId: 'V24681357' } },
+          deepJson: { data: { expenses: [{ note: '{"bankAccount":{"number":"55556666"}}' }] } },
+          prefixedJson: 'Details: {"bankAccount":{"number":"77778888"}}',
+          oneSlash: 'https:/files.example/private/SECRETKEY1',
+          backslash: 'https:\\\\files.example\\private\\SECRETKEY2',
+          slashNewline: 'https:/\n/files.example/private/SECRETKEY3',
+          comments: '4111<!-- -->1111<!-- -->1111<!-- -->1111',
+          labelSuffix: 'CVV code: 123; Expiry date: 12/28; Expiration date: 12/2028',
+          cardMeta: { code: 'code 123', date: 'Dec 28' },
+          unicode: 'Caf%C3%A9',
           nestedHtml: 'https://x/a&amp;amp;amp;#63;sig&amp;amp;amp;#61;abc',
           dashLabel: 'Account number - 12345678',
           cardVerificationValue: '123',
@@ -374,6 +383,8 @@ describe('calls', () => {
       expect(company).not.toContain(piece);
     }
     expect(company).toContain('"payee":{"id":"24681357","vendorId":"V24681357"}');
+    for (const piece of ['55556666', '77778888', 'SECRETKEY', '<!--', 'code: 123', '12/2028', 'Dec 28']) expect(company).not.toContain(piece);
+    expect(company).toContain('Café');
     for (const piece of ['sig%25%33%44', 'amp;#61', '"cardVerificationValue"', '"expiryMonth"', '"code":"123"', 'CVV: 123', '"accountingBank":{"number"']) {
       expect(company).not.toContain(piece);
     }
