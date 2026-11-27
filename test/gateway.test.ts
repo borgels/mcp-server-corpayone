@@ -793,3 +793,37 @@ describe('typed answers: the edges, ninth round', () => {
     for (const piece of ['1234', '567890']) expect(text).not.toContain(piece);
   });
 });
+
+describe('typed answers: the edges, tenth round', () => {
+  it('builds the text of an answer from its scrubbed data, so both say the same', async () => {
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, amount: 1240000, notes: [{ id: 'N1', value: 'Note:\nPlease approve' }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ id: 'E1', amount: 1240000, notes: [{ value: 'Note:\nPlease approve' }] });
+    expect(result.content[0]!.text).toBe(`The Corpay One expense.\n\n${JSON.stringify(result.structuredContent)}`);
+  });
+
+  it('removes an IPv4 address with a port, in any spelling, and keeps a time', async () => {
+    const value = 'A 0x7f000001:8080#PRIVAT B 127.1:8080#PRIVAT C kl. 12:34';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'A [link removed] B [link removed] C kl. 12:34' }] });
+  });
+
+  it('removes a link split by a tab or a line break, and keeps lines that only end in a colon or a dot', async () => {
+    const value = 'A https:\tfoo/x?ticket=PRIVAT B https:\n//foo/y C Bemærk:\nBetal i dag. Betalt.\nTak';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'A [link removed] B [link removed] C Bemærk:\nBetal i dag. Betalt.\nTak' }] });
+  });
+});
+
+describe('typed answers: link removal across line breaks stays linear', () => {
+  it('scans a long run of words joined by tabs and line breaks in linear time', async () => {
+    const { removeLinks } = await import('../src/corpay/gateway-answers.js');
+    for (const text of [`${'a\t'.repeat(100_000)}`, `${'a\n'.repeat(100_000)} x`, `${'0x1:'.repeat(50_000)}`]) {
+      const started = performance.now();
+      removeLinks(text);
+      expect(performance.now() - started).toBeLessThan(500);
+    }
+  });
+});

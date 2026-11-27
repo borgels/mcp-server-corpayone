@@ -331,8 +331,10 @@ function buildCorpayGateway(options: Partial<CorpayGatewayOptions>, credentials:
         },
         () =>
           runCall(toolName, input).then(result => {
-            // Every result is scrubbed, also an error that quotes the input: no bank or card number and no signed link leaves.
-            const final = withFailureInForm(redactDeep(scrub(result), redactor) as GatewayToolResult);
+            // Every result is scrubbed, also an error that quotes the input: no bank or card number and no link leaves. An
+            // answer is scrubbed as data and its text built again from it, so both say the same and JSON escapes are never
+            // read as text.
+            const final = finalResult(result, redactor);
             // The sink check, as the very last step: a result that holds a piece of a secret anywhere is withheld whole.
             return leaksSecret(final, redactor) ? withheldResult() : final;
           }),
@@ -432,6 +434,17 @@ export type CorpayGateway = ReturnType<typeof createCorpayGateway>;
 function jsonResult(text: string, structuredContent: unknown): GatewayToolResult {
   const data = JSON.parse(JSON.stringify(structuredContent ?? null)) as GatewayJsonValue;
   return { content: [{ type: 'text', text: `${text}\n\n${JSON.stringify(data)}` }], structuredContent: data };
+}
+
+/** A result as it leaves: an answer's data scrubbed and redacted, its text built from that; an error's text scrubbed. */
+function finalResult(result: GatewayToolResult, redactor: SecretRedactor | undefined): GatewayToolResult {
+  if (!result.isError && result.structuredContent !== undefined) {
+    const first = result.content[0]?.text ?? '';
+    const summary = first.includes('\n\n') ? first.slice(0, first.indexOf('\n\n')) : first;
+    const data = result.structuredContent;
+    return jsonResult(summary, sameKinds(data, redactDeep(scrub(data), redactor)));
+  }
+  return withFailureInForm(redactDeep(scrub(result), redactor) as GatewayToolResult);
 }
 
 function errorResult(text: string, failure?: GatewayFailure): GatewayToolResult {

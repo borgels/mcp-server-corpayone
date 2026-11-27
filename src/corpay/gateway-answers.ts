@@ -78,10 +78,13 @@ const TOP_LABEL = /^(?:\p{L}[\p{L}\p{M}]+|xn--[a-z0-9-]+)$/iu;
  * "127.1/x", "faktura/kreditnota"; not "A/S", "kr/md" or "27/11/2026"). Full-width and ideographic dots count as dots. A word that only looks like one is removed too: removing too much is the price of never letting a
  * link through. Linear in the length of the word.
  */
-function isLink(original: string): boolean {
+function isLink(original: string, joined = false): boolean {
   // Read as a browser would: full-width and ideographic dots are dots, compatibility forms their plain ones.
   const word = original.normalize('NFKC').replace(/[\u3002\uff0e\uff61]/g, '.');
   if (word.includes('//') || word.toLowerCase().includes('www.')) return true;
+  // Words joined across a line break are a link by "//", "www." or a special scheme only: "Note:<line break>Please"
+  // and "Betalt.<line break>Tak" are no links.
+  if (joined) return SPECIAL_SCHEME.test(word);
   if (SCHEME.test(word)) return true;
   // A query ("?name=value"), or an IPv6 literal ("[::1]").
   if (QUERY.test(word) || IPV6.test(word)) return true;
@@ -138,6 +141,8 @@ function isIpSpelling(word: string): boolean {
   while (to > from && /[^\p{L}\p{N}:%]/u.test(word[to - 1]!)) to -= 1;
   const core = word.slice(from, to);
   if (IPV4_OTHER.test(core)) return true;
+  // An IPv4 address in any spelling with a port: "127.1:8080", "0x7f000001:8080" (a time has no dot: "12:34").
+  if (/^(?:\d+(?:\.\d+){1,3}|0x[0-9A-Fa-f]+|\d+):\d{1,5}$/.test(core) && !/^\d{1,2}:\d{2}$/.test(core)) return true;
   if (!IPV6_BARE.test(core)) return false;
   // A time has two colons at most and no hex letters: "12:34:56" is no address.
   return core.includes('::') || (core.match(/:/g) ?? []).length >= 3 || /[A-Fa-f]/.test(core.replace(/%.*$/, ''));
@@ -145,8 +150,18 @@ function isIpSpelling(word: string): boolean {
 
 /** A text with every word that is or holds a link replaced by LINK_REMOVED. */
 export function removeLinks(text: string): string {
-  return text.replace(WORD, word => (isLink(word) ? LINK_REMOVED : word));
+  return text.replace(WIDE_WORD, wide => {
+    // A browser drops tabs and line breaks inside a link ("https:<tab>//host"): a run of words joined by them is one
+    // link when, joined, it reads as one ("//", "www." or a special scheme such as "https:").
+    if (/[\t\n\r]/.test(wide) && isLink(wide.replace(/[\t\n\r]+/g, ''), true)) return LINK_REMOVED;
+    return wide.replace(WORD, word => (isLink(word) ? LINK_REMOVED : word));
+  });
 }
+
+/** Words with only tabs and line breaks between them: what a browser could read as one link. */
+const WIDE_WORD = /\S+(?:[\t\n\r]+\S+)*/g;
+/** A scheme a browser reads as a link also without "//" after its colon ("https:host"). */
+const SPECIAL_SCHEME = /(?:^|[^A-Za-z0-9+.-])(?:https?|ftp|wss?|file|mailto|javascript|vbscript|data|blob):/i;
 
 /** A free text as it is passed on: links removed, then the pattern scrub as an extra guard. */
 export type TextScrub = (text: string) => string;
