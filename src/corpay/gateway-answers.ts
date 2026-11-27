@@ -30,33 +30,53 @@ const TAX_ID = /^[A-Za-z0-9 .-]{2,30}$/;
 /** Numbers at or above this are no amount or count Corpay One gives, and may be card numbers: they are left out. */
 const MAX_NUMBER = 1e12;
 export const LINK_REMOVED = '[link removed]';
-/**
- * A link in a text, up to a space, a double quote or an angle bracket (brackets, parentheses and apostrophes are taken
- * with it, so no part of a link is left behind):
- * - a scheme (a word that starts with a letter) and a colon with anything but a space, a quote or an angle bracket right
- *   after it (https://, mailto:, sms:1234, webcal: …; "Note: text" and "14:30" are no links);
- * - a scheme-relative "//host", or "www.";
- * - a bare host name (names and dots, ending in two letters or more) with a path, a query, a fragment or a port after it
- *   ("example.com/invoice?ticket=…"), or ending in a common top-level domain ("example.com").
- * A word and a colon with no space after it is taken as a link: removing too much is the price of never letting one
- * through.
- */
-const LINK = new RegExp(
-  [
-    `\\b[a-z][a-z0-9+.-]{0,30}:(?=[^\\s"'<>])`,
-    `(?<![\\w:/])\\/\\/(?=[^\\s/])`,
-    `\\bwww\\.`,
-    `\\b(?:[a-z0-9-]+\\.)+[a-z]{2,}(?=[/?#:])`,
-    `\\b(?:[a-z0-9-]+\\.)+(?:com|net|org|info|biz|io|co|app|dev|eu|dk|no|se|fi|is|de|nl|be|fr|es|it|pl|uk|us|ch|at|ie|me|ly|ai|xyz|online|site|link|page|cloud)\\b`,
-  ]
-    .map(start => `(?:${start})[^\\s"<>]*`)
-    .join('|'),
-  'gi',
-);
+/** A word of a text: everything up to a space, a double quote or an angle bracket. A link is removed as a whole word. */
+const WORD = /[^\s"<>]+/g;
+/** A scheme (a name that starts with a letter) and a colon with something right after it: https:, mailto:x, sms:1234. */
+const SCHEME = /(?:^|[^A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,30}:[^:]/;
+/** A run of ASCII letters, digits, dots and dashes in a word: where a host name may stand. */
+const HOST_RUN = /[A-Za-z0-9.-]+/g;
 
-/** A text with every link replaced by LINK_REMOVED. */
+/**
+ * Whether a word of a text is, or holds, a link: it holds "//" or "www.", a scheme with something after its colon
+ * ("Note: text" and "14:30" are no links), or a host name (labels with dots between, the first of two characters or
+ * more and the last of two letters or more: "example.com", "customer.finance", "faktura.pdf"; not "f.eks" or "1.240")
+ * or an IPv4 address. A word that only looks like one is removed too: removing too much is the price of never letting a
+ * link through. Linear in the length of the word.
+ */
+function isLink(word: string): boolean {
+  if (word.includes('//') || word.toLowerCase().includes('www.')) return true;
+  if (SCHEME.test(word)) return true;
+  for (const run of word.matchAll(HOST_RUN)) {
+    // A path, a query or a fragment right after it makes it a host name, whatever it ends in.
+    const next = word[(run.index ?? 0) + run[0].length];
+    if (isHost(run[0], next === '/' || next === '?' || next === '#')) return true;
+  }
+  return false;
+}
+
+/** Whether a run of ASCII letters, digits, dots and dashes is a host name or an IPv4 address, ends' dots and dashes aside. */
+function isHost(run: string, withPath: boolean): boolean {
+  let from = 0;
+  let to = run.length;
+  while (from < to && (run[from] === '.' || run[from] === '-')) from += 1;
+  while (to > from && (run[to - 1] === '.' || run[to - 1] === '-')) to -= 1;
+  const labels = run.slice(from, to).split('.');
+  if (labels.length < 2 || labels.some(label => label.length === 0)) return false;
+  if (labels.every(label => /^\d{1,3}$/.test(label))) {
+    return labels.length === 4 && labels.every(label => Number(label) <= 255 && !(label.length > 1 && label.startsWith('0')));
+  }
+  const last = labels[labels.length - 1]!;
+  if (!/^[A-Za-z]{2,}$/.test(last)) return false;
+  return withPath || (labels[0]!.length >= 2 && !ABBREVIATION_END.has(last.toLowerCase()));
+}
+
+/** Endings of common Danish and English abbreviations written with a dot ("Reg.nr.", "Kunde.nr"): no host names, unless a path follows. */
+const ABBREVIATION_END = new Set(['nr', 'nrs', 'eks', 'ex', 'inkl', 'excl', 'ekskl', 'evt', 'vedr', 'dvs', 'osv', 'att', 'tlf', 'ref', 'pga', 'iflg', 'ifm', 'mht', 'mv', 'mm', 'etc']);
+
+/** A text with every word that is or holds a link replaced by LINK_REMOVED. */
 export function removeLinks(text: string): string {
-  return text.replace(LINK, LINK_REMOVED);
+  return text.replace(WORD, word => (isLink(word) ? LINK_REMOVED : word));
 }
 
 /** A free text as it is passed on: links removed, then the pattern scrub as an extra guard. */

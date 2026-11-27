@@ -514,7 +514,7 @@ describe('typed answers: the edges', () => {
     const gw = gateway(impl);
     const expense = await gw.callTool('get_expense', { expenseId: 'E1' });
     expect(expense.structuredContent).toMatchObject({
-      notes: [{ id: 'N1', value: 'Se [faktura]([link removed] skriv til [link removed] eller [link removed]' }],
+      notes: [{ id: 'N1', value: 'Se [link removed] skriv til [link removed] eller [link removed]' }],
     });
     const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'https://plain.example/a': 1, '//other.example/b': 2 }));
     for (const piece of ['plain.example', 'other.example']) expect(invalid).not.toContain(piece);
@@ -665,5 +665,29 @@ describe('typed answers: the edges, fourth round', () => {
     const text = JSON.stringify(await gateway(impl).callTool('get_expense', { expenseId: 'E1' }));
     expect(text).not.toContain('QQQQQQQQ');
     expect(text).not.toContain('eyJhbGciOiJIUzI1NiJ9');
+  });
+});
+
+describe('typed answers: the edges, fifth round', () => {
+  it('removes IP addresses, any host name and a signed link with an apostrophe, also in an error', async () => {
+    const value = "Se 192.168.1.20/invoice?ticket=PRIVAT og customer.finance og kunde.nr/sti?x=1, Reg.nr. 1234, f.eks. her";
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const gw = gateway(impl);
+    const result = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({
+      notes: [{ value: 'Se [link removed] og [link removed] og [link removed] Reg.nr. [bank or card number removed], f.eks. her' }],
+    });
+    const signed = ['https://pay.example/invoice?Sig', "nature=abc'PRIVATE_PATH&Expires=123"].join('');
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', [signed]: 1, '192.168.1.20/x': 2 }));
+    for (const piece of ['PRIVATE_PATH', 'Expires', '192.168']) expect(invalid).not.toContain(piece);
+  });
+
+  it('removes links in time linear in the length of the text', async () => {
+    const { removeLinks } = await import('../src/corpay/gateway-answers.js');
+    for (const text of [`${'a.'.repeat(100_000)}!`, `${'-.'.repeat(100_000)}x`, `${'a:'.repeat(100_000)}`, `${'1.'.repeat(100_000)}`]) {
+      const started = performance.now();
+      removeLinks(text);
+      expect(performance.now() - started).toBeLessThan(500);
+    }
   });
 });

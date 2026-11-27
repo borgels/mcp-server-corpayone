@@ -89,11 +89,6 @@ const shortText = (max: number) => z.string().trim().min(1).max(max);
 
 /** Field names whose values are never passed on: bank and card numbers, and payment instructions. */
 const HIDDEN_FIELD = /^(iban|bban|bic|swift|swiftcode|bankaccount|bankaccountnumber|accountnumber|registrationnumber|regnumber|cardnumber|pan|cvc|cvv|paymentinstructions?|paymentmethod|paymentmethods|bankdetails|bankinformation)$/;
-/** A web link in a text: up to a space, a quote or an angle bracket. Signed ones are named as such when removed. */
-const LINK = /https?:\/\/[^\s"'<>]+/gi;
-/** A signed link opens a file for anyone who holds it, so it is not passed on, also inside a longer text. */
-const SIGNED = /Signature=|X-Amz-|Key-Pair-Id=|[?&]sig=|[?&]token=/i;
-export const SIGNED_LINK_REMOVED = '[signed link removed]';
 /** Where an IBAN may start: a country code and check digits, in capitals or not, whatever stands before it. */
 const IBAN_START = /[A-Z]{2}\d{2}/gi;
 /** The letters and digits that may follow, in groups separated by any run of spaces. */
@@ -117,25 +112,6 @@ function luhn(digits: string): boolean {
     sum += d;
   }
   return sum % 10 === 0;
-}
-
-/** Whether a link is signed, also when its parameters are percent-encoded (once or several times). */
-function isSigned(link: string): boolean {
-  // An HTML-escaped separator (&amp;) is a separator too.
-  let text = link.replace(/&(?:amp|#0*38|#x0*26);/gi, '&');
-  for (let round = 0; round < 4; round += 1) {
-    if (SIGNED.test(text)) return true;
-    let decoded: string;
-    try {
-      decoded = decodeURIComponent(text);
-    } catch {
-      // Not decodable as a whole: decode what can be, so an encoded name is still seen.
-      decoded = text.replace(/%[0-9a-f]{2}/gi, code => String.fromCharCode(parseInt(code.slice(1), 16)));
-    }
-    if (decoded === text) return false;
-    text = decoded.replace(/&(?:amp|#0*38|#x0*26);/gi, '&');
-  }
-  return true;
 }
 
 /**
@@ -190,7 +166,8 @@ function withoutIbans(value: string): string {
 
 /** A text with links, IBANs, named account numbers and card numbers removed; everything else as it is. */
 function scrubText(value: string): string {
-  return withoutIbans(removeLinks(value.replace(LINK, link => (isSigned(link) ? SIGNED_LINK_REMOVED : link))))
+  // Every link is removed whole first, so no partial replacement can leave a piece of one behind.
+  return withoutIbans(removeLinks(value))
     .replace(LABELLED_ACCOUNT, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(CARD, run => (holdsCardNumber(run) ? NUMBER_REMOVED : run));
 }

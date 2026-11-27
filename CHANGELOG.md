@@ -17,12 +17,14 @@ its tools are unchanged.
   and so is an id or a code that holds an account or card number or a host
   name. A number of a trillion or more is left out, never turned into text.
 - Links are never passed on: attachment URLs, websites and logos are not
-  listed, and any link in a text is replaced by `[link removed]`: web links,
-  scheme-relative links (`//host.example`), `www.`, any scheme followed at
-  once by its content (such as `mailto:`, `sms:` or `webcal:`), and bare host
-  names with a path (`example.com/invoice`) or a common ending
-  (`example.com`). A link is removed whole, also when it holds brackets or
-  apostrophes. This holds for error answers too.
+  listed, and every word of a text that is or holds a link is replaced by
+  `[link removed]`, whole: a word with `//` or `www.`, a scheme with
+  something after its colon (`https:`, `mailto:x`, `sms:1234`, `webcal:x`),
+  a host name (`example.com`, `customer.finance`, `faktura.pdf`; a host name
+  with a path whatever it ends in) or an IPv4 address. Common abbreviations
+  such as `Reg.nr.` and `f.eks.` stay. This holds for error answers too, and
+  replaces the `[signed link removed]` marker of 1.3. The scan is linear in
+  the length of the text.
 - Texts are never cut, so nothing that is to be removed is ever cut in two
   and missed.
 - A number or true/false that the secret redaction would turn into a marker
