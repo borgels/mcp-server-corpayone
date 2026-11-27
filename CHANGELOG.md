@@ -18,11 +18,13 @@ its tools are unchanged.
   name. A number of a trillion or more is left out, never turned into text.
 - Links are never passed on: attachment URLs, websites and logos are not
   listed, and any link in a text is replaced by `[link removed]`: web links,
-  scheme-relative links (`//host.example`), `www.` and any scheme followed
-  at once by its content, such as `mailto:`, `sms:` or `webcal:`. This holds
-  for error answers too.
-- A long text is cut at 20,000 characters only after links and numbers are
-  removed from all of it.
+  scheme-relative links (`//host.example`), `www.`, any scheme followed at
+  once by its content (such as `mailto:`, `sms:` or `webcal:`), and bare host
+  names with a path (`example.com/invoice`) or a common ending
+  (`example.com`). A link is removed whole, also when it holds brackets or
+  apostrophes. This holds for error answers too.
+- Texts are never cut, so nothing that is to be removed is ever cut in two
+  and missed.
 - A number or true/false that the secret redaction would turn into a marker
   is left out of the answer, so every field keeps its type.
 - The pattern scrub of bank and card numbers stays on free text, as an extra

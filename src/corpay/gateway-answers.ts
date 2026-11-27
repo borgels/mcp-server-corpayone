@@ -27,19 +27,32 @@ const HOST_IN_CODE = /www\.|[\p{L}\p{N}-]\.\p{L}{2,}/iu;
 const DATE = /^\d{4}-\d{2}-\d{2}(?:[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d{1,9})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
 /** A company or VAT number: letters, digits, spaces, dots and dashes; at most 12 digits in a row. */
 const TAX_ID = /^[A-Za-z0-9 .-]{2,30}$/;
-/** Longest free text passed on. */
-const MAX_TEXT = 20_000;
 /** Numbers at or above this are no amount or count Corpay One gives, and may be card numbers: they are left out. */
 const MAX_NUMBER = 1e12;
 export const LINK_REMOVED = '[link removed]';
 /**
- * A link in a text, up to a space, a quote or an angle bracket (brackets and parentheses are taken with it, so no part
- * of a link is left behind): a scheme (a word that starts with a letter) and a colon with anything but a space, a quote
- * or an angle bracket right after it (https://, mailto:, sms:1234, webcal: …; "Note: text" and "14:30" are no links); a
- * scheme-relative "//host"; or "www.". A word and a colon with no space after it is taken as a link: removing too much
- * is the price of never letting one through.
+ * A link in a text, up to a space, a double quote or an angle bracket (brackets, parentheses and apostrophes are taken
+ * with it, so no part of a link is left behind):
+ * - a scheme (a word that starts with a letter) and a colon with anything but a space, a quote or an angle bracket right
+ *   after it (https://, mailto:, sms:1234, webcal: …; "Note: text" and "14:30" are no links);
+ * - a scheme-relative "//host", or "www.";
+ * - a bare host name (names and dots, ending in two letters or more) with a path, a query, a fragment or a port after it
+ *   ("example.com/invoice?ticket=…"), or ending in a common top-level domain ("example.com").
+ * A word and a colon with no space after it is taken as a link: removing too much is the price of never letting one
+ * through.
  */
-const LINK = /(?:\b[a-z][a-z0-9+.-]{0,30}:(?=[^\s"'<>])|(?<![\w:/])\/\/(?=[^\s/])|\bwww\.)[^\s"'<>]*/gi;
+const LINK = new RegExp(
+  [
+    `\\b[a-z][a-z0-9+.-]{0,30}:(?=[^\\s"'<>])`,
+    `(?<![\\w:/])\\/\\/(?=[^\\s/])`,
+    `\\bwww\\.`,
+    `\\b(?:[a-z0-9-]+\\.)+[a-z]{2,}(?=[/?#:])`,
+    `\\b(?:[a-z0-9-]+\\.)+(?:com|net|org|info|biz|io|co|app|dev|eu|dk|no|se|fi|is|de|nl|be|fr|es|it|pl|uk|us|ch|at|ie|me|ly|ai|xyz|online|site|link|page|cloud)\\b`,
+  ]
+    .map(start => `(?:${start})[^\\s"<>]*`)
+    .join('|'),
+  'gi',
+);
 
 /** A text with every link replaced by LINK_REMOVED. */
 export function removeLinks(text: string): string {
@@ -99,8 +112,8 @@ function field(value: unknown, kind: FieldKind, scrubText: TextScrub): unknown {
       return typeof value === 'boolean' ? value : undefined;
     case 'text':
       if (typeof value !== 'string') return undefined;
-      // Cut only after links and numbers are removed, so a cut never leaves part of one behind unrecognised.
-      return scrubText(removeLinks(value)).slice(0, MAX_TEXT);
+      // Never cut: a cut could leave part of a link, a number or a secret behind, unrecognised.
+      return scrubText(removeLinks(value));
   }
 }
 

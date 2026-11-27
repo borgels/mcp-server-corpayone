@@ -637,3 +637,33 @@ describe('typed answers: the edges, third round', () => {
     expect(JSON.stringify(result)).not.toContain('124000');
   });
 });
+
+describe('typed answers: the edges, fourth round', () => {
+  it('removes a link whole, apostrophes in its path too, also in an error', async () => {
+    const signed = ['https://attachments.example/O', "'", 'Reilly.pdf?Sig', 'nature=Fortrolig&Key-Pair-Id=K'].join('');
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value: `Bilag ${signed} her` }] } } });
+    const gw = gateway(impl);
+    const result = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'Bilag [link removed] her' }] });
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', [signed]: 1 }));
+    for (const piece of ['Reilly', 'Fortrolig']) expect(invalid).not.toContain(piece);
+  });
+
+  it('removes a bare host name with a path or a common ending, also in an error', async () => {
+    const value = 'Se example.com/invoice?ticket=privat, eller leverandoer.dk, f.eks. kl. 14.30, bl.a. 1.240,00 kr.';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const gw = gateway(impl);
+    const result = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'Se [link removed] eller [link removed] f.eks. kl. 14.30, bl.a. 1.240,00 kr.' }] });
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'example.com/invoice?ticket=privat': 1 }));
+    expect(invalid).not.toContain('privat');
+  });
+
+  it('never cuts a long text, so a long token is still seen and redacted whole', async () => {
+    const token = ['eyJhbGciOiJIUzI1NiJ9', `eyJzdWIiOiJ${'Q'.repeat(20_050)}`, 'c2lnbmF0dXJlLXZhbHVl'].join('.');
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value: `Token ${token}` }] } } });
+    const text = JSON.stringify(await gateway(impl).callTool('get_expense', { expenseId: 'E1' }));
+    expect(text).not.toContain('QQQQQQQQ');
+    expect(text).not.toContain('eyJhbGciOiJIUzI1NiJ9');
+  });
+});
