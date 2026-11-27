@@ -330,6 +330,15 @@ describe('calls', () => {
           CID: '1234',
           beneficiaryAccount: { number: '12345678 DKK' },
           transitionId: 'T1',
+          carddetails: { number: '12345678', code: '123' },
+          beneficiaries: [{ number: '12345678' }],
+          cardStuff: { details: '{"code":"123","month":"12","year":"28"}' },
+          markup: '<b>Account number:</b> 98765432 og <span>4111</span><span>1111</span><span>1111</span><span>1111</span>',
+          percent: '4111%201111%201111%201111',
+          wwwInside: 'See (www.example.test/private/signed-token).',
+          splitLink: 'https://files.example/a?sig=\nabcdef',
+          separated: 'CVV: 1 2 3; Expiry: 2028-12',
+          payeeIds: { payee: { id: '24681357', vendorId: 'V24681357' } },
           nestedHtml: 'https://x/a&amp;amp;amp;#63;sig&amp;amp;amp;#61;abc',
           dashLabel: 'Account number - 12345678',
           cardVerificationValue: '123',
@@ -361,6 +370,10 @@ describe('calls', () => {
       expect(company).not.toContain(piece);
     }
     expect(company).toContain('"transitionId":"T1"');
+    for (const piece of ['"carddetails"', '"beneficiaries":[{"number"', '"month"', '98765432', '4111%20', 'www.example', 'abcdef', '1 2 3', '2028-12']) {
+      expect(company).not.toContain(piece);
+    }
+    expect(company).toContain('"payee":{"id":"24681357","vendorId":"V24681357"}');
     for (const piece of ['sig%25%33%44', 'amp;#61', '"cardVerificationValue"', '"expiryMonth"', '"code":"123"', 'CVV: 123', '"accountingBank":{"number"']) {
       expect(company).not.toContain(piece);
     }
@@ -384,9 +397,9 @@ describe('calls', () => {
     expect(invalid).not.toContain('Signature');
   });
 
-  it('looks for a query in linear time', () => {
+  it('looks for a query and reads field names in linear time', () => {
     const started = Date.now();
-    scrub({ note: '?'.repeat(200_000), other: `${'%25'.repeat(50_000)}3F` });
+    scrub({ note: '?'.repeat(200_000), other: `${'%25'.repeat(50_000)}3F`, ['A'.repeat(200_000)]: 1 });
     expect(Date.now() - started).toBeLessThan(2000);
   });
 

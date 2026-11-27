@@ -100,24 +100,52 @@ const shortText = (max: number) => z.string().trim().min(1).max(max);
 
 /** Field names (lower case, without separators) that speak of bank or card data: such a field is left out. */
 const HIDDEN_NAME =
-  /(iban|bban|bic$|swift|routing(no|nr|number|code)?s?$|^routing|sortcode|clearing(no|nr|number|code)?$|^transit(no|nr|number|code)?$|bsb$|^aba$|^cid$|cvv|cvc|cvn|csc|securitycode|verificationvalue|verificationcode|expiry|expiration|expdate|cardnumber|cardno|creditcard|debitcard|^cards?$|^pans?$|bankaccount|bankdetail|bankinfo|bankdata|banknumber|bankno|banknr|bankcode|bankreg|^bank$|^banks$|accountnumber|accountno|accountnr|^accounts?$|^acct|kontonummer|kontonr|^konto$|registrationnumber|registreringsnummer|^reg(no|nr|number)|paymentinstruction|paymentmethod|paymentdetail)/;
+  /(iban|bban|bic$|swift|routing(no|nr|number|code)?s?$|^routing|sortcode|clearing(no|nr|number|code)?$|^transit(no|nr|number|code)?$|bsb$|^aba$|^cid$|cvv|cvc|cvn|csc|securitycode|verificationvalue|verificationcode|expiry|expiration|expdate|cardnumber|cardno|carddetail|carddata|cardinfo|creditcard|debitcard|^cards?$|^pans?$|bankaccount|bankdetail|bankinfo|bankdata|banknumber|bankno|banknr|bankcode|bankreg|^bank$|^banks$|accountnumber|accountno|accountnr|^accounts?$|^acct|kontonummer|kontonr|^konto$|registrationnumber|registreringsnummer|^reg(no|nr|number)|paymentinstruction|paymentmethod|paymentdetail)/;
 /** The words of a name that speak of money held somewhere: an account, a bank, a card, a payee, a beneficiary. */
-const MONEY_WORDS: ReadonlySet<string> = new Set(['bank', 'banks', 'card', 'cards', 'account', 'accounts', 'acct', 'konto', 'payee', 'beneficiary', 'iban', 'pan', 'creditcard', 'debitcard', 'bankaccount']);
+const MONEY_WORDS: ReadonlySet<string> = new Set([
+  'bank', 'banks', 'card', 'cards', 'account', 'accounts', 'acct', 'konto', 'konti', 'payee', 'payees', 'beneficiary', 'beneficiaries',
+  'iban', 'ibans', 'pan', 'pans', 'creditcard', 'creditcards', 'debitcard', 'debitcards', 'bankaccount', 'bankaccounts',
+]);
+/** A name written in one word that begins with one of these speaks of money too: "carddetails", "bankinfo". */
+const MONEY_PREFIX = /^(bank|card|account|acct|konto|payee|beneficiar|iban|creditcard|debitcard)/;
 /** Names that speak of accounting, not of money held somewhere: the exact names, nothing more. */
 const NOT_MONEY: ReadonlySet<string> = new Set(['accounting', 'accounttype', 'accounttypes', 'accountingcategory']);
 /** The words of a field name: "bankAccount" is bank and account, "card_details" is card and details. */
 function wordsOf(name: string): string[] {
-  return name
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
-    .toLowerCase()
-    .split(/[^a-z0-9]+/)
-    .filter(word => word !== '');
+  // One pass over at most 200 characters: a word ends before a capital that follows a small letter or a digit, and
+  // before the last capital of a run that a small letter follows ("CARDDetails" is card and details).
+  const text = name.slice(0, 200);
+  const words: string[] = [];
+  let word = '';
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i]!;
+    const lower = char >= 'a' && char <= 'z';
+    const upper = char >= 'A' && char <= 'Z';
+    const digit = char >= '0' && char <= '9';
+    if (!lower && !upper && !digit) {
+      if (word) words.push(word);
+      word = '';
+      continue;
+    }
+    const previous = text[i - 1] ?? '';
+    const next = text[i + 1] ?? '';
+    const previousSmall = (previous >= 'a' && previous <= 'z') || (previous >= '0' && previous <= '9');
+    const previousUpper = previous >= 'A' && previous <= 'Z';
+    const nextSmall = next >= 'a' && next <= 'z';
+    if (upper && word && (previousSmall || (previousUpper && nextSmall))) {
+      words.push(word);
+      word = '';
+    }
+    word += char.toLowerCase();
+  }
+  if (word) words.push(word);
+  return words;
 }
 /** Whether a field name speaks of money held somewhere (a bank, a card, an account …), by its words. */
 function namesMoney(name: string): boolean {
   if (NOT_MONEY.has(name.toLowerCase().replace(/[-_\s.]/g, ''))) return false;
-  return wordsOf(name).some(word => MONEY_WORDS.has(word));
+  const words = wordsOf(name);
+  return words.some(word => MONEY_WORDS.has(word)) || (words.length === 1 && MONEY_PREFIX.test(words[0]!));
 }
 /** Separators between the groups of a number: spaces, dots, slashes and dashes of any kind. */
 const SEP = '[\\s\\u00a0./\\-\\u2010-\\u2015\\u2212]';
@@ -146,9 +174,9 @@ const LABELLED_ACCOUNT = new RegExp(
 );
 
 /** A card's security code named in text: "CVV: 123", "CVC2 456", "security code 1234". */
-const SECURITY_CODE = /\b(cvv2?|cvc2?|cvn|csc|cid|security\s*code|sikkerhedskode|kontrolcifre)([\s\u00a0:#.=\-"']*(?:(?:is|er)[\s\u00a0:"']+)?)\d{3,4}\b/gi;
+const SECURITY_CODE = /\b(cvv2?|cvc2?|cvn|csc|cid|security\s*code|sikkerhedskode|kontrolcifre)([\s\u00a0:#.=\-"']*(?:(?:is|er)[\s\u00a0:"']+)?)\d(?:[\s\u00a0.\-]?\d){2,3}\b/gi;
 /** A card's expiry named in text: "Expiry: 12/28", "exp. 12-2028", "udløb 12/28". */
-const EXPIRY = /\b(expiry|expiration|exp\.?|udløb(?:sdato)?|gyldig til)([\s\u00a0:#.=\-"']*(?:(?:is|er)[\s\u00a0:"']+)?)\d{1,2}\s*[/.\-]\s*\d{2,4}\b/gi;
+const EXPIRY = /\b(expiry|expiration|exp\.?|udløb(?:sdato)?|gyldig til)([\s\u00a0:#.=\-"']*(?:(?:is|er)[\s\u00a0:"']+)?)(?:\d{1,2}\s*[/.\-]\s*\d{2,4}|\d{4}\s*[/.\-]\s*\d{1,2})\b/gi;
 
 /** Whether a run of digits passes the Luhn check, as every card number does. */
 function luhn(digits: string): boolean {
@@ -263,7 +291,7 @@ function holdsQuery(word: string): boolean {
 function isLink(word: string): boolean {
   let text = word;
   for (let round = 0; round < 8; round += 1) {
-    if (/^[a-z][a-z0-9+.-]*:\/\/|\/\/[a-z0-9-]|^www\./i.test(text) || /:\/\//.test(text)) return true;
+    if (/:\/\/|\/\/[a-z0-9-]|(?:^|[^a-z0-9])www\./i.test(text)) return true;
     const decoded = htmlDecoded(text).replace(/%([0-9a-f]{2})/gi, (_whole, hex: string) => String.fromCharCode(parseInt(hex, 16)));
     if (decoded === text) return false;
     text = decoded;
@@ -277,31 +305,44 @@ function isLink(word: string): boolean {
  * tabs and line breaks inside a link, so the text is looked at with them dropped too.
  */
 function withoutQueries(value: string): string {
-  return value
-    .split(/([\s"<>]+)/)
-    .map(part => (part.length > 1 && (isLink(part) || holdsQuery(part)) ? SIGNED_LINK_REMOVED : part))
-    .join('');
+  const parts = value.split(/([\s"<>]+)/);
+  let removing = false;
+  for (let i = 0; i < parts.length; i += 1) {
+    const part = parts[i]!;
+    if (i % 2 === 1) {
+      // A browser drops tabs and line breaks inside a link: what follows one goes with the link before it.
+      if (removing && !/^[\t\r\n]+$/.test(part)) removing = false;
+      continue;
+    }
+    if (removing || (part.length > 1 && (isLink(part) || holdsQuery(part)))) {
+      parts[i] = removing ? '' : SIGNED_LINK_REMOVED;
+      removing = true;
+    }
+  }
+  return parts.join('');
 }
 
 /** A text with links that carry a query, IBANs, named account numbers and card numbers removed. */
-function scrubText(original: string, depth = 0): string {
+function scrubText(original: string, depth = 0, inMoney = false): string {
   // A text that is JSON is scrubbed as data, field names and all, and written out again.
   const trimmed = original.trim();
   if (depth < 4 && (trimmed.startsWith('{') || trimmed.startsWith('[')) && trimmed.length <= 1_000_000) {
     try {
-      return JSON.stringify(scrub(JSON.parse(trimmed), depth + 1));
+      return JSON.stringify(scrub(JSON.parse(trimmed), depth + 1, '', inMoney));
     } catch {
       // Not JSON: a text as any other.
     }
   }
-  // HTML character references are written out first (also nested), so nothing hides behind them.
-  let value = original;
+  // Links and queries are found on the text as it came; then HTML references and percent-encoding are written out (also
+  // nested) and HTML tags taken away, so no number hides behind them or is split by them.
+  let value = withoutQueries(original);
   for (let round = 0; round < 8; round += 1) {
-    const decoded = htmlDecoded(value);
+    const decoded = htmlDecoded(value).replace(/%([0-9a-f]{2})/gi, (_whole, hex: string) => String.fromCharCode(parseInt(hex, 16)));
     if (decoded === value) break;
     value = decoded;
   }
-  return withoutIbans(withoutQueries(value))
+  value = withoutQueries(value.replace(/<\/?[a-z][^<>]{0,500}>/gi, ''));
+  return withoutIbans(value)
     .replace(LABELLED_ACCOUNT, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(SECURITY_CODE, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(EXPIRY, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
@@ -312,13 +353,15 @@ function scrubText(original: string, depth = 0): string {
 export function scrub(value: unknown, depth = 0, key = '', inMoney = false): unknown {
   if (depth > 64) return undefined;
   if (typeof value === 'string') {
-    if (ID_KEY.test(key) && !namesMoney(key) && !inMoney && ID_VALUE.test(value)) return value;
+    // A resource's id is kept, also below a payee (a vendor's id there addresses the vendor), unless its own name
+    // speaks of money.
+    if (ID_KEY.test(key) && !namesMoney(key) && ID_VALUE.test(value)) return value;
     if (inMoney && (DIGITS.test(value) || /\d(?:[\s\u00a0./\-]*\d){3}/.test(value))) return undefined;
-    return scrubText(value, depth);
+    return scrubText(value, depth, inMoney);
   }
   if (Array.isArray(value)) return value.map(entry => scrub(entry, depth + 1, key, inMoney)).filter(entry => entry !== undefined);
   if (typeof value === 'number') {
-    if (ID_KEY.test(key) && !namesMoney(key) && !inMoney && Number.isSafeInteger(value)) return value;
+    if (ID_KEY.test(key) && !namesMoney(key) && Number.isSafeInteger(value)) return value;
     if (inMoney) return undefined;
     // A card number may also come as a number. Above the safe integers the digits are no longer the ones that were
     // sent, so such a number is removed as it is.

@@ -18,6 +18,14 @@ review of 1.3.0:
   routing, clearing and transit codes are matched as whole names, so
   `transitionId` is kept. Below money objects, any text with four digits in a
   row is left out.
+- Field names are read in one linear pass (at most 200 characters); plurals
+  (`beneficiaries`) and one-word compounds (`carddetails`) count as money. JSON
+  in a text keeps the money context it stands in. Before numbers are looked
+  for, percent-encoding is written out and HTML tags are taken away, so a number
+  split across tags is found. `www.` is a link anywhere in a word, and what
+  follows a tab or line break inside a link is removed with it. Security codes
+  with spaced digits and year-first expiry dates are found. A resource id is
+  kept also below a payee.
 - Fields whose names speak of a bank, a card, an account number, a routing,
   clearing or sort code, a security code or a payment instruction are left out,
   under any spelling (`accountNo`, `bankRoutingNumber`, `account.number`,
