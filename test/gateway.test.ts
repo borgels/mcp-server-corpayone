@@ -737,3 +737,30 @@ describe('typed answers: the edges, seventh round', () => {
     }
   });
 });
+
+describe('typed answers: the edges, eighth round', () => {
+  it('removes a link whole before the error is redacted, so no part of it is left after a secret', async () => {
+    const key = ['https://pay.example/invoice?to', 'ken=ABCDEFGH&ticket=PRIVATE_PATH&Sig', 'nature=SECRET_SIGNATURE'].join('');
+    const { impl } = stub({});
+    const invalid = JSON.stringify(await gateway(impl).callTool('get_vendor', { vendorId: 'V1', [key]: 1 }));
+    for (const piece of ['PRIVATE_PATH', 'SECRET_SIGNATURE', 'pay.example']) expect(invalid).not.toContain(piece);
+  });
+
+  it('removes IP addresses in other spellings, and keeps times and plain numbers', async () => {
+    const value = 'A 0177.0.0.1 B 0x7f000001 C 2001:db8::1 D [fe80::1%25eth0] E 2001:0:0:0:0:0:0:1 F kl. 12:34:56, 127.1 kr. og ref 2130706433';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({
+      notes: [{ value: 'A [link removed] B [link removed] C [link removed] D [link removed] E [link removed] F kl. 12:34:56, 127.1 kr. og ref 2130706433' }],
+    });
+  });
+
+  it('still scans in linear time, also a long run of punctuation between slashes', async () => {
+    const { removeLinks } = await import('../src/corpay/gateway-answers.js');
+    for (const text of [`/${'!'.repeat(100_000)}abcde`, `${'!'.repeat(100_000)}:`, `${'0:'.repeat(100_000)}`]) {
+      const started = performance.now();
+      removeLinks(text);
+      expect(performance.now() - started).toBeLessThan(500);
+    }
+  });
+});

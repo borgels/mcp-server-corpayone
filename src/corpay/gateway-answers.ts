@@ -36,10 +36,31 @@ const WORD = /[^\s"<>]+/g;
 const SCHEME = /(?:^|[^A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*:[^:]/;
 /** A query in a word: a question mark and, before the next one, an equals sign. */
 const QUERY = /\?[^?]*=/;
-/** An IPv6 literal in a word: hex digits and colons in square brackets. */
-const IPV6 = /\[[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*\]/;
-/** A part of a word between slashes that is no path: four letters or digits at most, with punctuation around them. */
-const SHORT_PART = /^[^\p{L}\p{N}]*[\p{L}\p{N}]{0,4}[^\p{L}\p{N}:?]*$/u;
+/** An IPv6 literal in a word: hex digits, colons, dots and a zone ("%25eth0") in square brackets. */
+const IPV6 = /\[[0-9A-Za-z.%]*:[0-9A-Za-z:.%]*\]/;
+/** An IPv6 address without brackets: "::", or three colons or more with hex digits between ("2001:db8:0:0:0:0:0:1"). */
+const IPV6_BARE = /^[^0-9A-Fa-f:]*(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?:%[0-9A-Za-z]+)?[^0-9A-Za-z:]*$/;
+/** Four groups of digits with dots between, also with leading zeros ("0177.0.0.1"), or a hex number ("0x7f000001"). */
+const IPV4_OTHER = /^(?:\d{1,4}\.){3}\d{1,4}$|^0x[0-9A-Fa-f]{1,8}$/;
+
+/**
+ * Whether a part of a word between slashes is short and plain, so no path: four letters or digits at most, in one run,
+ * with no colon or question mark ("A", "S.", "kr", "2026"). A scan, linear in the length of the part.
+ */
+function isShortPart(part: string): boolean {
+  let letters = 0;
+  let runs = 0;
+  let inRun = false;
+  for (const char of part) {
+    if (char === ':' || char === '?') return false;
+    const letter = /[\p{L}\p{N}]/u.test(char);
+    if (letter && !inRun) runs += 1;
+    if (letter) letters += 1;
+    inRun = letter;
+    if (letters > 4 || runs > 1) return false;
+  }
+  return true;
+}
 /** A run of letters, digits, dots and dashes in a word (any script): where a host name may stand. */
 const HOST_RUN = /[\p{L}\p{N}\p{M}.-]+/gu;
 /** The last label of a host name: two letters or more (any script), or an internationalised one ("xn--…"). */
@@ -62,7 +83,9 @@ function isLink(original: string): boolean {
   // A query ("?name=value"), or an IPv6 literal ("[::1]").
   if (QUERY.test(word) || IPV6.test(word)) return true;
   // A path: a word with "/" is a link unless every part is short and plain ("A/S", "kr/md", "27/11/2026").
-  if (word.includes('/') && !word.split('/').every(part => SHORT_PART.test(part))) return true;
+  if (word.includes('/') && !word.split('/').every(isShortPart)) return true;
+  // An IP address in another spelling: IPv6 without brackets, IPv4 with leading zeros or as a hex number.
+  if (isIpSpelling(word)) return true;
   for (const run of word.matchAll(HOST_RUN)) {
     // A path, a query or a fragment right after it makes it a host name, whatever it ends in.
     const next = word[(run.index ?? 0) + run[0].length];
@@ -92,6 +115,24 @@ function isHost(run: string, withPath: boolean): boolean {
  * top-level domain: no host names, unless a path follows.
  */
 const ABBREVIATION_END = new Set(['nr', 'nrs', 'eks', 'inkl', 'ekskl', 'excl', 'evt', 'vedr', 'dvs', 'osv', 'tlf', 'pga', 'iflg', 'ifm', 'mht', 'etc']);
+
+/**
+ * Whether a word, punctuation around it aside, is an IP address in a spelling other than the plain dotted one: IPv6
+ * without brackets ("2001:db8::1"; not a time such as "12:34:56"), four dotted groups with leading zeros ("0177.0.0.1")
+ * or a hex number ("0x7f000001"). A plain number ("127.1", "2130706433") is never taken for a link: in a text it is an
+ * amount, a count or a reference, and as a link it would need a scheme, "//" or a path, which are removed.
+ */
+function isIpSpelling(word: string): boolean {
+  let from = 0;
+  let to = word.length;
+  while (from < to && /[^\p{L}\p{N}:%]/u.test(word[from]!)) from += 1;
+  while (to > from && /[^\p{L}\p{N}:%]/u.test(word[to - 1]!)) to -= 1;
+  const core = word.slice(from, to);
+  if (IPV4_OTHER.test(core)) return true;
+  if (!IPV6_BARE.test(core)) return false;
+  // A time has two colons at most and no hex letters: "12:34:56" is no address.
+  return core.includes('::') || (core.match(/:/g) ?? []).length >= 3 || /[A-Fa-f]/.test(core.replace(/%.*$/, ''));
+}
 
 /** A text with every word that is or holds a link replaced by LINK_REMOVED. */
 export function removeLinks(text: string): string {

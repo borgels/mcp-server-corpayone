@@ -4,6 +4,7 @@ import { fixedOutputs, withheldResult } from './fallbacks.js';
 import { SecretRedactor } from './gateway-redactor.js';
 import { admitsKey, KEY_REFUSED, leaksSecret, maskedText, sealedError } from './key-admission.js';
 import { redactDeep, redactText } from './redaction.js';
+import { removeLinks } from './corpay/gateway-answers.js';
 import { writeGatewayAuditEvent } from './corpay/gateway-audit.js';
 import { basicCredentials, CorpayGatewayClient, type CorpayEnvironment } from './corpay/gateway-client.js';
 import { failureMetadata, vendorRequestId, type FailureMetadata } from './corpay/gateway-errors.js';
@@ -351,7 +352,8 @@ function buildCorpayGateway(options: Partial<CorpayGatewayOptions>, credentials:
       const parsed = schema.safeParse(input ?? {});
       if (!parsed.success) {
         await writeGatewayAuditEvent({ tool: name, action: 'rejected', reason: 'invalid input' });
-        return errorResult(redactText(`Invalid input for ${tool.name}: ${z.prettifyError(parsed.error)}`, redactor));
+        // Links are removed whole before redaction, which could split one and leave its end behind.
+        return errorResult(redactText(removeLinks(`Invalid input for ${tool.name}: ${z.prettifyError(parsed.error)}`), redactor));
       }
       const values = parsed.data as Record<string, unknown>;
       const denied = policyDenial(name, tool);
@@ -373,7 +375,7 @@ function buildCorpayGateway(options: Partial<CorpayGatewayOptions>, credentials:
       // A number or true/false that redaction turned into a marker is left out, so every field keeps its type.
       return jsonResult(tool.summary, sameKinds(data, redactDeep(redactDeep(scrub(data), redactor), redactor)));
     } catch (error) {
-      return errorResult(redactText(error instanceof Error ? error.message : String(error), redactor), failureMetadata(error));
+      return errorResult(redactText(removeLinks(error instanceof Error ? error.message : String(error)), redactor), failureMetadata(error));
     }
   }
 }

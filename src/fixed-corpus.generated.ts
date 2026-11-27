@@ -71,6 +71,7 @@ export const FIXED_CORPUS: readonly string[] = [
   "./client.js",
   "./corpay/catalog.js",
   "./corpay/client.js",
+  "./corpay/gateway-answers.js",
   "./corpay/gateway-audit.js",
   "./corpay/gateway-client.js",
   "./corpay/gateway-errors.js",
