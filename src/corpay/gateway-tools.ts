@@ -89,10 +89,15 @@ const LINK = /https?:\/\/[^\s"'<>]+/gi;
 /** A signed link opens a file for anyone who holds it, so it is not passed on, also inside a longer text. */
 const SIGNED = /Signature=|X-Amz-|Key-Pair-Id=|[?&]sig=|[?&]token=/i;
 export const SIGNED_LINK_REMOVED = '[signed link removed]';
-/** An IBAN candidate in a text, in capitals or not and whatever stands before it: country code, check digits and 11 to 30 more letters or digits, in groups or not. */
-const IBAN = /[A-Z]{2}\d{2}(?:[\s\u00a0]?[A-Z0-9]){11,30}/gi;
+/** Where an IBAN may start: a country code and check digits, in capitals or not, whatever stands before it. */
+const IBAN_START = /[A-Z]{2}\d{2}/gi;
+/** The letters and digits that may follow, in groups separated by any run of spaces. */
+const IBAN_REST = /^(?:[\s\u00a0]*[A-Z0-9]){11,30}/i;
+/** A domestic account or sort code named as one in the text: "Reg.nr. 1234", "Konto 1234567890", "Account no. 12-34-56". */
+const LABELLED_ACCOUNT =
+  /\b(reg(?:istrerings)?\.?\s*nr\.?|registreringsnummer|konto(?:nr\.?|nummer)?|account(?:\s*(?:no\.?|number|nr\.?))?|acct\.?(?:\s*no\.?)?|sort\s*code|routing(?:\s*(?:no\.?|number))?|bsb|aba)(\s*[:#.]?\s*)\d[\d\s\u00a0-]{2,}\d/gi;
 /** A run of 13 or more digits, in groups or not and whatever stands next to it: it holds a card number when part of it passes the Luhn check. */
-const CARD = /\d(?:[\s\u00a0-]?\d){12,}/g;
+const CARD = /\d(?:[\s\u00a0-]*\d){12,}/g;
 export const NUMBER_REMOVED = '[bank or card number removed]';
 
 /** Whether a run of digits passes the Luhn check, as every card number does. */
@@ -111,7 +116,8 @@ function luhn(digits: string): boolean {
 
 /** Whether a link is signed, also when its parameters are percent-encoded (once or several times). */
 function isSigned(link: string): boolean {
-  let text = link;
+  // An HTML-escaped separator (&amp;) is a separator too.
+  let text = link.replace(/&(?:amp|#0*38|#x0*26);/gi, '&');
   for (let round = 0; round < 4; round += 1) {
     if (SIGNED.test(text)) return true;
     let decoded: string;
@@ -122,15 +128,18 @@ function isSigned(link: string): boolean {
       decoded = text.replace(/%[0-9a-f]{2}/gi, code => String.fromCharCode(parseInt(code.slice(1), 16)));
     }
     if (decoded === text) return false;
-    text = decoded;
+    text = decoded.replace(/&(?:amp|#0*38|#x0*26);/gi, '&');
   }
   return true;
 }
 
-/** Whether a candidate holds an IBAN: 15 to 34 of its letters and digits from the start pass the mod-97 check. */
-function holdsIban(candidate: string): boolean {
+/**
+ * How many letters and digits from the start of a candidate make an IBAN (15 to 34 that pass the mod-97 check, the
+ * longest that does), or 0 when none do.
+ */
+function ibanLength(candidate: string): number {
   const compact = candidate.replace(/[\s\u00a0]/g, '').toUpperCase();
-  for (let length = 15; length <= Math.min(34, compact.length); length += 1) {
+  for (let length = Math.min(34, compact.length); length >= 15; length -= 1) {
     const iban = compact.slice(0, length);
     const moved = iban.slice(4) + iban.slice(0, 4);
     let rest = 0;
@@ -138,16 +147,40 @@ function holdsIban(candidate: string): boolean {
       const value = char >= 'A' ? String(char.charCodeAt(0) - 55) : char;
       for (const digit of value) rest = (rest * 10 + Number(digit)) % 97;
     }
-    if (rest === 1) return true;
+    if (rest === 1) return length;
   }
-  return false;
+  return 0;
 }
 
-/** A text with signed links, IBANs and card numbers removed; everything else as it is. */
+/**
+ * A text with every IBAN removed: each place a country code and check digits stand is tried, also inside or right after
+ * a candidate that failed, so a failed one never hides a real one.
+ */
+function withoutIbans(value: string): string {
+  let out = '';
+  let from = 0;
+  IBAN_START.lastIndex = 0;
+  for (let found = IBAN_START.exec(value); found !== null; found = IBAN_START.exec(value)) {
+    const start = found.index;
+    IBAN_START.lastIndex = start + 1;
+    if (start < from) continue;
+    const rest = IBAN_REST.exec(value.slice(start + 4));
+    const length = rest ? ibanLength(value.slice(start, start + 4 + rest[0].length)) : 0;
+    if (length === 0) continue;
+    // The end in the text: after the IBAN's last letter or digit, spaces between its groups counted.
+    let end = start;
+    for (let seen = 0; seen < length; end += 1) if (!/[\s\u00a0]/.test(value[end]!)) seen += 1;
+    out += value.slice(from, start) + NUMBER_REMOVED;
+    from = end;
+    IBAN_START.lastIndex = from;
+  }
+  return out + value.slice(from);
+}
+
+/** A text with signed links, IBANs, named account numbers and card numbers removed; everything else as it is. */
 function scrubText(value: string): string {
-  return value
-    .replace(LINK, link => (isSigned(link) ? SIGNED_LINK_REMOVED : link))
-    .replace(IBAN, candidate => (holdsIban(candidate) ? NUMBER_REMOVED : candidate))
+  return withoutIbans(value.replace(LINK, link => (isSigned(link) ? SIGNED_LINK_REMOVED : link)))
+    .replace(LABELLED_ACCOUNT, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(CARD, run => (holdsCardNumber(run) ? NUMBER_REMOVED : run));
 }
 
