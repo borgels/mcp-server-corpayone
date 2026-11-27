@@ -53,6 +53,14 @@ its tools are unchanged.
   never Corpay One's body; a new vendor is answered with the vendors Corpay
   One names, typed.
 
+### Known limits of the free-text guard
+
+The allow-lists decide what leaves; the link and number scrub of free text
+(notes, comments, names) is an extra guard and recognises links by their
+form. Forms it does not recognise yet, found in review: host names made of
+symbols or emoji (`☃.net/a`, `💩.la`) and an IPv4 address in another spelling
+with a trailing dot before its port (`0x7f000001.:8080`, `0177.0.0.1.:8080`).
+
 ### Migrating from 1.3
 
 | Tool | 1.3 answer | 2.0 answer |
