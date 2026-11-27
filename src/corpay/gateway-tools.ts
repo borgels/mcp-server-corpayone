@@ -114,7 +114,29 @@ function scrubText(value: string): string {
   return value
     .replace(LINK, link => (SIGNED.test(link) ? SIGNED_LINK_REMOVED : link))
     .replace(IBAN, NUMBER_REMOVED)
-    .replace(CARD, run => (luhn(run.replace(/[ -]/g, '')) ? NUMBER_REMOVED : run));
+    .replace(CARD, run => (holdsCardNumber(run) ? NUMBER_REMOVED : run));
+}
+
+/**
+ * Whether a run of digits holds a card number: 13 to 19 digits that pass the Luhn check, starting where the run or one
+ * of its groups starts and ending where a group ends (or, in a run without separators, starting where it starts). The
+ * whole run is removed then, also what follows the card number in it.
+ */
+function holdsCardNumber(run: string): boolean {
+  const groups = run.split(/[ -]/);
+  if (groups.length === 1) {
+    for (let length = 13; length <= Math.min(19, run.length); length += 1) if (luhn(run.slice(0, length))) return true;
+    return false;
+  }
+  for (let start = 0; start < groups.length; start += 1) {
+    let digits = '';
+    for (let end = start; end < groups.length; end += 1) {
+      digits += groups[end];
+      if (digits.length > 19) break;
+      if (digits.length >= 13 && luhn(digits)) return true;
+    }
+  }
+  return false;
 }
 
 /** A copy of Corpay's answer with bank and card fields, IBANs and card numbers in texts, and signed links left out. */
