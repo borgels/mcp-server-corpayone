@@ -370,11 +370,34 @@ function buildCorpayGateway(options: Partial<CorpayGatewayOptions>, credentials:
       }
       await writeGatewayAuditEvent({ tool: name, action: 'finish', target, status: 'ok' });
       // Every answer is scrubbed here as well, on top of its type, whatever the tool did: no bank or card number and no signed link leaves.
-      return jsonResult(tool.summary, redactDeep(redactDeep(scrub(data), redactor), redactor));
+      // A number or true/false that redaction turned into a marker is left out, so every field keeps its type.
+      return jsonResult(tool.summary, sameKinds(data, redactDeep(redactDeep(scrub(data), redactor), redactor)));
     } catch (error) {
       return errorResult(redactText(error instanceof Error ? error.message : String(error), redactor), failureMetadata(error));
     }
   }
+}
+
+/**
+ * The redacted answer with every number or true/false that redaction (or the scrub) changed into something else left
+ * out, so a typed field is never turned into text. Texts stay, redacted.
+ */
+export function sameKinds(before: unknown, after: unknown, depth = 0): unknown {
+  if (depth > 64) return undefined;
+  if (Array.isArray(before) && Array.isArray(after)) {
+    return after.map((entry, i) => sameKinds(before[i], entry, depth + 1)).filter(entry => entry !== undefined);
+  }
+  if (before !== null && after !== null && typeof before === 'object' && typeof after === 'object' && !Array.isArray(before) && !Array.isArray(after)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(after as Record<string, unknown>)) {
+      const kept = sameKinds((before as Record<string, unknown>)[key], entry, depth + 1);
+      if (kept !== undefined) out[key] = kept;
+    }
+    return out;
+  }
+  if ((typeof before === 'number' || typeof before === 'boolean') && typeof after !== typeof before) return undefined;
+  if (typeof after === 'number' || typeof after === 'boolean') return typeof before === typeof after ? after : undefined;
+  return after;
 }
 
 /** Why the host's policy refuses a tool, or undefined when it may run. */

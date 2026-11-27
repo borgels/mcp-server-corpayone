@@ -601,3 +601,39 @@ describe('typed answers: the edges, second round', () => {
     expect(result.structuredContent).toEqual({ teamFound: true, team: { name: 'Demo Byg ApS' } });
   });
 });
+
+describe('typed answers: the edges, third round', () => {
+  it('removes a link whose scheme is followed by digits, also in an error', async () => {
+    const value = 'Skriv sms:12345678?body=fortroligt eller se http:127.0.0.1/private?ticket=ABCD kl. 14:30';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const gw = gateway(impl);
+    const result = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'Skriv [link removed] eller se [link removed] kl. 14:30' }] });
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'sms:12345678?body=fortroligt': 1, 'http:127.0.0.1/private': 2 }));
+    for (const piece of ['fortroligt', '127.0.0.1', 'private']) expect(invalid).not.toContain(piece);
+  });
+
+  it('removes a card number that stands where a long text is cut', async () => {
+    const value = `${'x'.repeat(19_988)}4111111111111111`;
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const text = JSON.stringify(await gateway(impl).callTool('get_expense', { expenseId: 'E1' }));
+    expect(text).not.toContain('4111');
+  });
+
+  it('keeps a time with fractions of a second', async () => {
+    const dueDate = '2026-11-27T12:34:56.1234567Z';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, dueDate, issueDate: '2026-11-01T08:00:00+01:00' } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ dueDate, issueDate: '2026-11-01T08:00:00+01:00' });
+  });
+
+  it('leaves out a number that redaction would turn into text, so every field keeps its type', async () => {
+    const secret = `${fake('withdigits', 12)}124000${fake('rest', 10)}`;
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, amount: 1240000, number: 7 } } });
+    const result = await gateway(impl, { clientSecret: secret }).callTool('get_expense', { expenseId: 'E1' });
+    const content = result.structuredContent as Record<string, unknown>;
+    expect(content.amount).toBeUndefined();
+    expect(content.number).toBe(7);
+    expect(JSON.stringify(result)).not.toContain('124000');
+  });
+});

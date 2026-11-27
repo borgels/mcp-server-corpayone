@@ -18,8 +18,13 @@ its tools are unchanged.
   name. A number of a trillion or more is left out, never turned into text.
 - Links are never passed on: attachment URLs, websites and logos are not
   listed, and any link in a text is replaced by `[link removed]`: web links,
-  scheme-relative links (`//host.example`), `www.` and schemes such as
-  `mailto:`. This holds for error answers too.
+  scheme-relative links (`//host.example`), `www.` and any scheme followed
+  at once by its content, such as `mailto:`, `sms:` or `webcal:`. This holds
+  for error answers too.
+- A long text is cut at 20,000 characters only after links and numbers are
+  removed from all of it.
+- A number or true/false that the secret redaction would turn into a marker
+  is left out of the answer, so every field keeps its type.
 - The pattern scrub of bank and card numbers stays on free text, as an extra
   guard; it now also finds card and named account numbers grouped with dots
   or slashes.
