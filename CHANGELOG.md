@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.3.1
+
+Harder scrubbing in the embeddable gateway (`./gateway`), after an independent
+review:
+
+- Account numbers under more field names (`accountNo`, `bankAccountNo`, any
+  `bank*` field, `card`) and as the `number` of an `account`, `bank` or `card`
+  object are left out.
+- Account numbers named in text are found with more labels ("Konto nr.",
+  "Account (DKK):", "A/C").
+- IBANs and card numbers grouped with dots or any kind of dash are found.
+- A field that is a link as a whole is checked whole, also with an apostrophe
+  in its path; links without a scheme (`//host/...`) are checked; more signing
+  parameters are known (Akamai `hdnts`/`hdntl`, `Expires`, `Policy`, Google
+  `X-Goog-`, `hmac`, `key`, `code` and others). A link still encoded after four
+  rounds of decoding is removed.
+
 ## 1.3.0
 
 The embeddable gateway (`./gateway`) is rebuilt for hosts that serve several

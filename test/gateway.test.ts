@@ -273,7 +273,12 @@ describe('calls', () => {
     const { impl } = stub({
       'GET /external/v1/teams': { data: { teams: [{ id: TEAM, name }] } },
       'GET /external/v1/teams/team-own': {
-        data: { name: 'A PAN4111111111111111 og 4111111111111111USD og gb29nwbk60161331926819 og IBANgb29nwbk60161331926819 og DK50\t0040\t0440\t1162\t43 og 4111\t1111\u00a01111 1111 og https://files.example/invoice?sv=2024-01-01&%73ig=abcdef og id ab12cdefghijklmnop og GB29  NWBK  6016  1331  9268  19 og 5555  5555  5555  4444 og ref1234 GB29NWBK60161331926819 og ref1059 GB29NWBK60161331926819 og Account #: 1234567890 og Reg.nr. 9876 Konto 3456789012 og <a href="https://files.example/i?sv=1&amp;sig=abcdef">bilag</a>', gb29nwbk60161331926819: 3, card: 4111111111111111, big: 6221234567890598594, small: 42, '4111111111111111': 1, 'https://x.example/a?Signature=abc': 2 },
+        data: { name: 'A PAN4111111111111111 og 4111111111111111USD og gb29nwbk60161331926819 og IBANgb29nwbk60161331926819 og DK50\t0040\t0440\t1162\t43 og 4111\t1111\u00a01111 1111 og https://files.example/invoice?sv=2024-01-01&%73ig=abcdef og id ab12cdefghijklmnop og GB29  NWBK  6016  1331  9268  19 og 5555  5555  5555  4444 og ref1234 GB29NWBK60161331926819 og ref1059 GB29NWBK60161331926819 og Account #: 1234567890 og Reg.nr. 9876 Konto 3456789012 og <a href="https://files.example/i?sv=1&amp;sig=abcdef">bilag</a> og Konto nr. 22334455 og Account (DKK): 66778899 og A/C 55443322 og GB29-NWBK-6016-1331-9268-19 og 4111.1111.1111.1111 og 5555‑5555‑5555‑4444 og https://files.example/bob\'s.pdf?Expires=2000000000&Signature=abc&Key-Pair-Id=K og //files.example/i.pdf?Expires=2000000000&Signature=abc og https://files.example/x.pdf?hdnts=exp=2000000000~acl=/*~hmac=a1d9',
+          accountNo: '12345678',
+          bankAccountNo: '12345678',
+          account: { number: '12345678' },
+          url: "https://files.example/bob's.pdf?Expires=2000000000&Signature=abc",
+          gb29nwbk60161331926819: 3, card: 4111111111111111, big: 6221234567890598594, small: 42, '4111111111111111': 1, 'https://x.example/a?Signature=abc': 2 },
       },
     });
     const gw = gateway(impl);
@@ -283,7 +288,9 @@ describe('calls', () => {
     expect(company).not.toContain('4111111111111111');
     expect(company).not.toContain('Signature');
     expect(company).not.toContain('gb29nwbk');
-    for (const piece of ['0440', '4111', '%73ig', 'NWBK', '5555', '9876', '3456789012', 'sig=abcdef', '1331926819', '1234567890', '622123']) expect(company).not.toContain(piece);
+    for (const piece of ['0440', '4111', '%73ig', 'NWBK', '5555', '9876', '3456789012', 'sig=abcdef', '1331926819', '1234567890', '622123', '22334455', '66778899', '55443322', '12345678', 'Signature', 'hmac', 'Key-Pair']) {
+      expect(company).not.toContain(piece);
+    }
     // Letters and digits that fail the IBAN check are kept.
     expect(company).toContain('ab12cdefghijklmnop');
     expect(company).toContain('"small":42');

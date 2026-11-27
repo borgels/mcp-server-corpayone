@@ -83,21 +83,29 @@ const shortText = (max: number) => z.string().trim().min(1).max(max);
 // ------------------------------------------------------------- answers
 
 /** Field names whose values are never passed on: bank and card numbers, and payment instructions. */
-const HIDDEN_FIELD = /^(iban|bban|bic|swift|swiftcode|bankaccount|bankaccountnumber|accountnumber|registrationnumber|regnumber|cardnumber|pan|cvc|cvv|paymentinstructions?|paymentmethod|paymentmethods|bankdetails|bankinformation)$/;
-/** A link in a text: up to a space, a quote or an angle bracket. */
-const LINK = /https?:\/\/[^\s"'<>]+/gi;
+const HIDDEN_FIELD =
+  /^(iban|bban|bic|swift|swiftcode|bank(account|accounts|details|information|info|no|nr|number|code|reg|regno|regnr)?.*|(account|acct|konto)(no|nr|num|number|nummer)|accountnumbers?|registrationnumber|registreringsnummer|reg(no|nr|number)|sortcode|routing(no|number)?|cardnumber|card|cards|pan|cvc|cvv|paymentinstructions?|paymentmethods?|paymentdetails)$/;
+/** A parent whose `number`, `no` or `nr` is an account's: its value is never passed on either. */
+const ACCOUNT_PARENT = /(account|acct|konto|bank|card)/;
+const NUMBER_KEY = /^(number|no|nr|num|nummer|value)$/;
+/** A link in a text, also one without its scheme ("//host/..."): up to a space, a double quote or an angle bracket. */
+const LINK = /(?:https?:)?\/\/[^\s"<>]+/gi;
 /** A signed link opens a file for anyone who holds it, so it is not passed on, also inside a longer text. */
-const SIGNED = /Signature=|X-Amz-|Key-Pair-Id=|[?&]sig=|[?&]token=/i;
+const SIGNED =
+  /Signature=|X-Amz-|X-Goog-|Key-Pair-Id=|Policy=|Expires=|hdnts=|hdntl=|__token__=|[?&;~](sig|sv|se|st|sp|token|hmac|auth|authkey|access_token|key|code)=/i;
 export const SIGNED_LINK_REMOVED = '[signed link removed]';
 /** Where an IBAN may start: a country code and check digits, in capitals or not, whatever stands before it. */
 const IBAN_START = /[A-Z]{2}\d{2}/gi;
 /** The letters and digits that may follow, in groups separated by any run of spaces. */
-const IBAN_REST = /^(?:[\s\u00a0]*[A-Z0-9]){11,30}/i;
+const IBAN_REST = /^(?:[\s\u00a0.\-\u2010-\u2015\u2212]*[A-Z0-9]){11,30}/i;
+/** What may stand between the groups of an IBAN or a card number: spaces, dots and dashes of any kind. */
+const GROUP_SEPARATOR = /[\s\u00a0.\-\u2010-\u2015\u2212]/;
+const GROUP_SEPARATORS = /[\s\u00a0.\-\u2010-\u2015\u2212]/g;
 /** A domestic account or sort code named as one in the text: "Reg.nr. 1234", "Konto 1234567890", "Account no. 12-34-56". */
 const LABELLED_ACCOUNT =
-  /\b(reg(?:istrerings)?\.?\s*nr\.?|registreringsnummer|konto(?:nr\.?|nummer)?|account(?:\s*(?:no\.?|number|nr\.?))?|acct\.?(?:\s*no\.?)?|sort\s*code|routing(?:\s*(?:no\.?|number))?|bsb|aba)([\s\u00a0:#.=-]*)\d[\d\s\u00a0-]{2,}\d/gi;
+  /\b(reg(?:istrerings)?\.?\s*(?:nr|no)\.?|registreringsnummer|konto(?:\s*(?:nr\.?|nummer|no\.?))?|account(?:\s*(?:no\.?|number|nr\.?|#))?|a\/c(?:\s*no\.?)?|acct\.?(?:\s*no\.?)?|sort\s*code|routing(?:\s*(?:no\.?|number))?|bsb|aba)((?:[\s\u00a0]*\([A-Z]{3}\))?[\s\u00a0:#.=\-\u2010-\u2015\u2212]*)\d[\d\s\u00a0.\-\u2010-\u2015\u2212]{2,}\d/gi;
 /** A run of 13 or more digits, in groups or not and whatever stands next to it: it holds a card number when part of it passes the Luhn check. */
-const CARD = /\d(?:[\s\u00a0-]*\d){12,}/g;
+const CARD = /\d(?:[\s\u00a0.\-\u2010-\u2015\u2212]*\d){12,}/g;
 export const NUMBER_REMOVED = '[bank or card number removed]';
 
 /** Whether a run of digits passes the Luhn check, as every card number does. */
@@ -114,7 +122,10 @@ function luhn(digits: string): boolean {
   return sum % 10 === 0;
 }
 
-/** Whether a link is signed, also when its parameters are percent-encoded (once or several times). */
+/**
+ * Whether a link is signed, also when its parameters are percent-encoded (once or several times) or HTML-escaped. A link
+ * still encoded after four rounds is taken as signed: it is removed rather than looked at further.
+ */
 function isSigned(link: string): boolean {
   // An HTML-escaped separator (&amp;) is a separator too.
   let text = link.replace(/&(?:amp|#0*38|#x0*26);/gi, '&');
@@ -138,7 +149,7 @@ function isSigned(link: string): boolean {
  * longest that does), or 0 when none do.
  */
 function ibanLength(candidate: string): number {
-  const compact = candidate.replace(/[\s\u00a0]/g, '').toUpperCase();
+  const compact = candidate.replace(GROUP_SEPARATORS, '').toUpperCase();
   for (let length = Math.min(34, compact.length); length >= 15; length -= 1) {
     const iban = compact.slice(0, length);
     const moved = iban.slice(4) + iban.slice(0, 4);
@@ -169,7 +180,7 @@ function withoutIbans(value: string): string {
     if (length === 0) continue;
     // The end in the text: after the IBAN's last letter or digit, spaces between its groups counted.
     let end = start;
-    for (let seen = 0; seen < length; end += 1) if (!/[\s\u00a0]/.test(value[end]!)) seen += 1;
+    for (let seen = 0; seen < length; end += 1) if (!GROUP_SEPARATOR.test(value[end]!)) seen += 1;
     const last = marks[marks.length - 1];
     if (last && start <= last[1]) last[1] = Math.max(last[1], end);
     else marks.push([start, end]);
@@ -196,7 +207,7 @@ function scrubText(value: string): string {
  * when it holds no card number; that is the price of never letting one through.
  */
 function holdsCardNumber(run: string): boolean {
-  const digits = run.replace(/[\s\u00a0-]/g, '');
+  const digits = run.replace(GROUP_SEPARATORS, '');
   for (let start = 0; start + 13 <= digits.length; start += 1) {
     for (let length = 13; length <= 19 && start + length <= digits.length; length += 1) {
       if (luhn(digits.slice(start, start + length))) return true;
@@ -206,10 +217,11 @@ function holdsCardNumber(run: string): boolean {
 }
 
 /** A copy of Corpay's answer with bank and card fields, IBANs and card numbers in texts, and signed links left out. */
-export function scrub(value: unknown, depth = 0): unknown {
+export function scrub(value: unknown, depth = 0, parent = ''): unknown {
   if (depth > 64) return undefined;
-  if (typeof value === 'string') return scrubText(value);
-  if (Array.isArray(value)) return value.map(entry => scrub(entry, depth + 1)).filter(entry => entry !== undefined);
+  // A value that is a link as a whole is looked at as a whole, whatever it holds.
+  if (typeof value === 'string') return /^\s*(?:https?:)?\/\//i.test(value) && isSigned(value) ? SIGNED_LINK_REMOVED : scrubText(value);
+  if (Array.isArray(value)) return value.map(entry => scrub(entry, depth + 1, parent)).filter(entry => entry !== undefined);
   // A card number may also come as a number.
   // Above the safe integers the digits are no longer the ones that were sent, so such a number is removed as it is.
   if (typeof value === 'number') {
@@ -218,11 +230,15 @@ export function scrub(value: unknown, depth = 0): unknown {
   }
   if (value === null || typeof value !== 'object') return value;
   const out: Record<string, unknown> = {};
+  const within = parent.toLowerCase().replace(/[-_\s]/g, '');
   for (const [key, entry] of Object.entries(value)) {
-    if (HIDDEN_FIELD.test(key.toLowerCase().replace(/[-_\s]/g, ''))) continue;
+    const name = key.toLowerCase().replace(/[-_\s]/g, '');
+    if (HIDDEN_FIELD.test(name)) continue;
+    // "account": { "number": ... } and the like: an account's number under any name of the parent.
+    if (NUMBER_KEY.test(name) && ACCOUNT_PARENT.test(within)) continue;
     // A key that holds a number or a link the texts may not hold is left out with its value.
     if (scrubText(key) !== key) continue;
-    const kept = scrub(entry, depth + 1);
+    const kept = scrub(entry, depth + 1, key);
     if (kept !== undefined) out[key] = kept;
   }
   return out;
