@@ -99,6 +99,8 @@ const LABELLED_ACCOUNT =
 /** A run of 13 or more digits, in groups or not and whatever stands next to it: it holds a card number when part of it passes the Luhn check. */
 const CARD = /\d(?:[\s\u00a0._/-]*\d){12,}/g;
 export const NUMBER_REMOVED = '[bank or card number removed]';
+/** Every dash and minus sign Unicode has, read as a hyphen between the groups of a number. */
+const DASHES = /[\p{Pd}−➖﹣－]/gu;
 
 /** Whether a run of digits passes the Luhn check, as every card number does. */
 function luhn(digits: string): boolean {
@@ -166,8 +168,11 @@ function withoutIbans(value: string): string {
 
 /** A text with links, IBANs, named account numbers and card numbers removed; everything else as it is. */
 function scrubText(value: string): string {
-  // Every link is removed whole first, so no partial replacement can leave a piece of one behind.
-  return withoutIbans(removeLinks(value))
+  // Read as written: compatibility forms as their plain ones (full-width digits are digits), and every dash a hyphen,
+  // so a number grouped with them is still found. Every link is removed whole first, so no partial replacement can leave
+  // a piece of one behind.
+  const plain = value.normalize('NFKC').replace(DASHES, '-');
+  return withoutIbans(removeLinks(plain))
     .replace(LABELLED_ACCOUNT, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(CARD, run => (holdsCardNumber(run) ? NUMBER_REMOVED : run));
 }

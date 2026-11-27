@@ -837,3 +837,23 @@ describe('typed answers: the edges, eleventh round', () => {
     expect(JSON.stringify(result)).not.toContain('PRIVAT');
   });
 });
+
+describe('typed answers: the edges, twelfth round', () => {
+  it('removes card numbers in full-width digits or grouped with any dash', async () => {
+    const value = 'A ４１１１ １１１１ １１１１ １１１１ B 4111–1111–1111–1111 C 5555—5555—5555—4444 D 4111−1111−1111−1111';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({
+      notes: [{ value: 'A [bank or card number removed] B [bank or card number removed] C [bank or card number removed] D [bank or card number removed]' }],
+    });
+    for (const piece of ['4111', '１１１１', '5555']) expect(JSON.stringify(result)).not.toContain(piece);
+  });
+
+  it('removes a known scheme after a line break in a longer run, and hex IPv4 with a port', async () => {
+    const value = 'A Hello\nwebcal:\nPRIVAT1 B 1.2.3.0xff:8080#PRIVAT2 C 0x7f.0.0.1:8080#PRIVAT3 D Bemærk:\nBetal kl. 12:34';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'A [link removed] B [link removed] C [link removed] D Bemærk:\nBetal kl. 12:34' }] });
+    expect(JSON.stringify(result)).not.toContain('PRIVAT');
+  });
+});

@@ -33,7 +33,8 @@ its tools are unchanged.
   (`127.1`), which are no links without a scheme, `//` or a path. In an
   error, links are removed whole before secrets are redacted. A link split
   by a tab or a line break (`https:<tab>//host`, `webcal:<line break>…`) is
-  removed whole too, by `//`, `www.` or a known scheme; any other word and a
+  removed whole too, by `//`, `www.` or a known scheme in any of the words
+  before a break; any other word and a
   colon at the end of a line (`Note:`) is no link.
 - An answer's text is built from its final, scrubbed data, so the text and
   `structuredContent` always say the same. This holds for error answers too, and
@@ -44,8 +45,9 @@ its tools are unchanged.
 - A number or true/false that the secret redaction would turn into a marker
   is left out of the answer, so every field keeps its type.
 - The pattern scrub of bank and card numbers stays on free text, as an extra
-  guard; it now also finds card and named account numbers grouped with dots,
-  slashes or underscores.
+  guard; it now reads text in Unicode's compatibility form (NFKC: full-width
+  digits are digits) with every dash as a hyphen, and finds card and named
+  account numbers grouped with dots, slashes, underscores or any dash.
 - `list_coding_options` passes on every label list (no longer the first 50).
 - A change answers with what was done, built from its own input and typed,
   never Corpay One's body; a new vendor is answered with the vendors Corpay

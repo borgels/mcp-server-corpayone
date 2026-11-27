@@ -45,6 +45,8 @@ const IPV6 = /\[[0-9A-Za-z.%]*:[0-9A-Za-z:.%]*\]/;
 const IPV6_BARE = /^[^0-9A-Fa-f:]*(?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4}(?:%[0-9A-Za-z]+)?[^0-9A-Za-z:]*$/;
 /** Four groups of digits with dots between, also with leading zeros ("0177.0.0.1"), or a hex number ("0x7f000001"). */
 const IPV4_OTHER = /^(?:(?:0x[0-9A-Fa-f]*|\d+)\.){3}(?:0x[0-9A-Fa-f]*|\d+)$|^0x[0-9A-Fa-f]{1,8}$/i;
+/** An IPv4 address in any spelling (one to four parts, decimal or hex) and a port. */
+const IPV4_WITH_PORT = /^(?:0x[0-9A-Fa-f]*|\d+)(?:\.(?:0x[0-9A-Fa-f]*|\d+)){0,3}:\d{1,5}$/i;
 /** Two to four dotted parts of which one is a hex number ("0x7f.1", "1.2.3.0xff"): an IPv4 address, no amount. */
 const IPV4_HEX_PART = /^(?:(?:0x[0-9A-Fa-f]*|\d+)\.){1,3}(?:0x[0-9A-Fa-f]*|\d+)$/i;
 
@@ -144,8 +146,9 @@ function isIpSpelling(word: string): boolean {
   const core = word.slice(from, to);
   if (IPV4_OTHER.test(core)) return true;
   if (IPV4_HEX_PART.test(core) && /0x/i.test(core)) return true;
-  // An IPv4 address in any spelling with a port: "127.1:8080", "0x7f000001:8080" (a time has no dot: "12:34").
-  if (/^(?:\d+(?:\.\d+){1,3}|0x[0-9A-Fa-f]+|\d+):\d{1,5}$/.test(core) && !/^\d{1,2}:\d{2}$/.test(core)) return true;
+  // An IPv4 address in any spelling with a port: "127.1:8080", "0x7f000001:8080", "0x7f.0.0.1:8080" (a time is no
+  // address: "12:34").
+  if (IPV4_WITH_PORT.test(core) && !/^\d{1,2}:\d{2}$/.test(core)) return true;
   if (!IPV6_BARE.test(core)) return false;
   // A time has two colons at most and no hex letters: "12:34:56" is no address.
   return core.includes('::') || (core.match(/:/g) ?? []).length >= 3 || /[A-Fa-f]/.test(core.replace(/%.*$/, ''));
@@ -156,7 +159,12 @@ export function removeLinks(text: string): string {
   return text.replace(WIDE_WORD, wide => {
     // A browser drops tabs and line breaks inside a link ("https:<tab>//host"): a run of words joined by them is one
     // link when, joined, it reads as one ("//", "www." or a known scheme such as "https:" or "webcal:").
-    if (/[\t\n\r]/.test(wide) && isLink(wide.replace(/[\t\n\r]+/g, ''), true)) return LINK_REMOVED;
+    if (/[\t\n\r]/.test(wide)) {
+      // A known scheme in any of the words before a break ("Hello<line break>webcal:<line break>…"), or the words joined.
+      const parts = wide.split(/[\t\n\r]+/);
+      if (parts.slice(0, -1).some(part => KNOWN_SCHEME.test(part))) return LINK_REMOVED;
+      if (isLink(parts.join(''), true)) return LINK_REMOVED;
+    }
     return wide.replace(WORD, word => (isLink(word) ? LINK_REMOVED : word));
   });
 }
