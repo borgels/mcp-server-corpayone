@@ -89,11 +89,38 @@ const LINK = /https?:\/\/[^\s"'<>]+/gi;
 /** A signed link opens a file for anyone who holds it, so it is not passed on, also inside a longer text. */
 const SIGNED = /Signature=|X-Amz-|Key-Pair-Id=|[?&]sig=|[?&]token=/i;
 export const SIGNED_LINK_REMOVED = '[signed link removed]';
+/** An IBAN in a text: country code, check digits and 11 to 30 more letters or digits, in groups or not. */
+const IBAN = /\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]){11,30}\b/g;
+/** A run of 13 to 19 digits, in groups or not: a card number when it passes the Luhn check. */
+const CARD = /\b\d(?:[ -]?\d){12,18}\b/g;
+export const NUMBER_REMOVED = '[bank or card number removed]';
 
-/** A copy of Corpay's answer with bank and card fields and signed links left out. */
+/** Whether a run of digits passes the Luhn check, as every card number does. */
+function luhn(digits: string): boolean {
+  let sum = 0;
+  for (let i = 0; i < digits.length; i += 1) {
+    let d = Number(digits[digits.length - 1 - i]);
+    if (i % 2 === 1) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    sum += d;
+  }
+  return sum % 10 === 0;
+}
+
+/** A text with signed links, IBANs and card numbers removed; everything else as it is. */
+function scrubText(value: string): string {
+  return value
+    .replace(LINK, link => (SIGNED.test(link) ? SIGNED_LINK_REMOVED : link))
+    .replace(IBAN, NUMBER_REMOVED)
+    .replace(CARD, run => (luhn(run.replace(/[ -]/g, '')) ? NUMBER_REMOVED : run));
+}
+
+/** A copy of Corpay's answer with bank and card fields, IBANs and card numbers in texts, and signed links left out. */
 export function scrub(value: unknown, depth = 0): unknown {
   if (depth > 64) return undefined;
-  if (typeof value === 'string') return value.replace(LINK, link => (SIGNED.test(link) ? SIGNED_LINK_REMOVED : link));
+  if (typeof value === 'string') return scrubText(value);
   if (Array.isArray(value)) return value.map(entry => scrub(entry, depth + 1)).filter(entry => entry !== undefined);
   if (value === null || typeof value !== 'object') return value;
   const out: Record<string, unknown> = {};

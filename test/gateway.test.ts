@@ -213,7 +213,7 @@ describe('calls', () => {
         data: { id: 'V1', name: 'A', iban: 'DK5000400440116243', bankAccount: { regNumber: '1234' }, logo: 'https://files.example/a.png' },
       },
       'GET /external/v3/expenses/E1': {
-        data: { ...OWN_EXPENSE.data, note: 'Invoice: https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K attached', attachments: [{ id: 'A1', url: 'https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K' }] },
+        data: { ...OWN_EXPENSE.data, note: 'Invoice: https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K attached; pay to IBAN DK5000400440116243, card 4111 1111 1111 1111, order 12345678901234', attachments: [{ id: 'A1', url: 'https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K' }] },
       },
     });
     const gw = gateway(impl);
@@ -221,7 +221,7 @@ describe('calls', () => {
     expect(vendor.structuredContent).toEqual({ data: { id: 'V1', name: 'A', logo: 'https://files.example/a.png' } });
     const expense = await gw.callTool('get_expense', { expenseId: 'E1' });
     expect(JSON.stringify(expense)).not.toContain('Signature');
-    expect(JSON.stringify(expense)).toContain('Invoice: [signed link removed] attached');
+    expect(JSON.stringify(expense)).toContain('Invoice: [signed link removed] attached; pay to IBAN [bank or card number removed], card [bank or card number removed], order 12345678901234');
   });
 
   it('gives an HTTP error as our own text with failure metadata, never the body', async () => {

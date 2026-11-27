@@ -625,6 +625,7 @@ export const FIXED_CORPUS: readonly string[] = [
   "Write a comment in the activity log of an expense, for colleagues and approvers to see.",
   "Writes are disabled. The embedding host has not enabled writes for this instance.",
   "[REDACTED]",
+  "[bank or card number removed]",
   "[http] ",
   "[http] 500 ",
   "[nested too deep]",
