@@ -32,6 +32,13 @@ review of 1.3.0:
   numbers are looked for; percent-encoding is decoded as UTF-8. Labels such as
   "CVV code" and "Expiry date" are found. Below money objects, every text with
   a digit is left out.
+- Links are removed before JSON is looked for in a text, and each JSON object
+  or array in a text is found on its own (one linear pass). A text over
+  1,000,000 characters is removed (`[text removed]`). `https:host` and
+  relative paths with two segments count as links. Labels with typographic
+  quotes and codes with dashes are found. An id name with an object below it
+  keeps its money context; names over 10,000 characters count as money; short
+  forms such as `accountNo` are matched as whole names, so `accountNote` stays.
 - Fields whose names speak of a bank, a card, an account number, a routing,
   clearing or sort code, a security code or a payment instruction are left out,
   under any spelling (`accountNo`, `bankRoutingNumber`, `account.number`,

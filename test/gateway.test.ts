@@ -348,6 +348,14 @@ describe('calls', () => {
           labelSuffix: 'CVV code: 123; Expiry date: 12/28; Expiration date: 12/2028',
           cardMeta: { code: 'code 123', date: 'Dec 28' },
           unicode: 'Caf%C3%A9',
+          metaLink: 'https://files.example/a?metadata=[1]&sig=SECRETKEY4',
+          twoJson: 'Status [paid]. Details {"bankAccount":{"number":"12340000"}}',
+          paymentCardId: { number: '43215678', code: '321' },
+          payeeId: { number: '87650000' },
+          noSlashes: 'https:files.example/private/SECRETKEY5',
+          relativePath: '/private/SECRETKEY6',
+          curly: 'CVV: \u201c987\u201d; Expiry: \u201c11/27\u201d; Security code: 1\u20132\u20133',
+          accountNote: 'ordinary',
           nestedHtml: 'https://x/a&amp;amp;amp;#63;sig&amp;amp;amp;#61;abc',
           dashLabel: 'Account number - 12345678',
           cardVerificationValue: '123',
@@ -385,6 +393,8 @@ describe('calls', () => {
     expect(company).toContain('"payee":{"id":"24681357","vendorId":"V24681357"}');
     for (const piece of ['55556666', '77778888', 'SECRETKEY', '<!--', 'code: 123', '12/2028', 'Dec 28']) expect(company).not.toContain(piece);
     expect(company).toContain('Café');
+    for (const piece of ['SECRETKEY', '12340000', '43215678', '87650000', '987', '11/27', '1\u20132']) expect(company).not.toContain(piece);
+    expect(company).toContain('"accountNote":"ordinary"');
     for (const piece of ['sig%25%33%44', 'amp;#61', '"cardVerificationValue"', '"expiryMonth"', '"code":"123"', 'CVV: 123', '"accountingBank":{"number"']) {
       expect(company).not.toContain(piece);
     }

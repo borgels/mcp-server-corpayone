@@ -635,6 +635,7 @@ export const FIXED_CORPUS: readonly string[] = [
   "[http] 500 ",
   "[link removed]",
   "[nested too deep]",
+  "[text removed]",
   "\\b(reg(?:istrerings)?\\.?\\s*(?:nr|no)\\.?|registreringsnummer|konto(?:\\s*(?:nr\\.?|nummer|no\\.?))?|account(?:\\s*(?:no\\.?|number|nr\\.?|#))?|a\\/c(?:\\s*no\\.?)?|acct\\.?(?:\\s*no\\.?)?|sort\\s*code|routing(?:\\s*(?:no\\.?|number|code))?|bsb|aba)((?:\\s*\\([A-Z]{3}\\))?[\\s\\u00a0:#.=\\-\\u2010-\\u2015\\u2212\"'\\u201c\\u201d]*(?:(?:is|er|was|var)[\\s\\u00a0:\"'\\u201c\\u201d]+)?)\\d(?:",
   "] is not a known gateway tool.",
   "^/v1/teams$",

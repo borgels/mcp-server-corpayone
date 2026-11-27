@@ -100,7 +100,7 @@ const shortText = (max: number) => z.string().trim().min(1).max(max);
 
 /** Field names (lower case, without separators) that speak of bank or card data: such a field is left out. */
 const HIDDEN_NAME =
-  /(iban|bban|bic$|swift|routing(no|nr|number|code)?s?$|^routing|sortcode|clearing(no|nr|number|code)?$|^transit(no|nr|number|code)?$|bsb$|^aba$|^cid$|cvv|cvc|cvn|csc|securitycode|verificationvalue|verificationcode|expiry|expiration|expdate|cardnumber|cardno|carddetail|carddata|cardinfo|creditcard|debitcard|^cards?$|^pans?$|bankaccount|bankdetail|bankinfo|bankdata|banknumber|bankno|banknr|bankcode|bankreg|^bank$|^banks$|accountnumber|accountno|accountnr|^accounts?$|^acct|kontonummer|kontonr|^konto$|registrationnumber|registreringsnummer|^reg(no|nr|number)|paymentinstruction|paymentmethod|paymentdetail)/;
+  /(iban|bban|bic$|swift|routing(no|nr|number|code)?s?$|^routing|sortcode|clearing(no|nr|number|code)?$|^transit(no|nr|number|code)?$|bsb$|^aba$|^cid$|cvv|cvc|cvn|csc|securitycode|verificationvalue|verificationcode|expiry|expiration|expdate|cardnumber|cardnos?$|carddetail|carddata|cardinfo|creditcard|debitcard|^cards?$|^pans?$|bankaccount|bankdetail|bankinfo|bankdata|banknumber|banknos?$|banknrs?$|bankcode|bankreg|^bank$|^banks$|accountnumber|accountnos?$|accountnrs?$|^accounts?$|^acct|kontonummer|kontonr|^konto$|registrationnumber|registreringsnummer|^reg(no|nr|number)|paymentinstruction|paymentmethod|paymentdetail)/;
 /** The words of a name that speak of money held somewhere: an account, a bank, a card, a payee, a beneficiary. */
 const MONEY_WORDS: ReadonlySet<string> = new Set([
   'bank', 'banks', 'card', 'cards', 'account', 'accounts', 'acct', 'konto', 'konti', 'payee', 'payees', 'beneficiary', 'beneficiaries',
@@ -114,7 +114,7 @@ const NOT_MONEY: ReadonlySet<string> = new Set(['accounting', 'accounttype', 'ac
 function wordsOf(name: string): string[] {
   // One pass over at most 200 characters: a word ends before a capital that follows a small letter or a digit, and
   // before the last capital of a run that a small letter follows ("CARDDetails" is card and details).
-  const text = name.slice(0, 200);
+  const text = name;
   const words: string[] = [];
   let word = '';
   for (let i = 0; i < text.length; i += 1) {
@@ -143,6 +143,8 @@ function wordsOf(name: string): string[] {
 }
 /** Whether a field name speaks of money held somewhere (a bank, a card, an account …), by its words. */
 function namesMoney(name: string): boolean {
+  // A name longer than any real field name is taken as speaking of money: nothing below it is passed on.
+  if (name.length > 10_000) return true;
   if (NOT_MONEY.has(name.toLowerCase().replace(/[-_\s.]/g, ''))) return false;
   const words = wordsOf(name);
   return words.some(word => MONEY_WORDS.has(word)) || (words.length === 1 && MONEY_PREFIX.test(words[0]!));
@@ -174,9 +176,9 @@ const LABELLED_ACCOUNT = new RegExp(
 );
 
 /** A card's security code named in text: "CVV: 123", "CVC2 456", "security code 1234". */
-const SECURITY_CODE = /\b((?:cvv2?|cvc2?|cvn|csc|cid)(?:\s*(?:code|kode|number|nr|no)\.?)?|security\s*code|sikkerhedskode|kontrolcifre)([\s\u00a0:#.=\-"']*(?:(?:is|er)[\s\u00a0:"']+)?)\d(?:[\s\u00a0.\-]?\d){2,3}\b/gi;
+const SECURITY_CODE = /\b((?:cvv2?|cvc2?|cvn|csc|cid)(?:\s*(?:code|kode|number|nr|no)\.?)?|security\s*code|sikkerhedskode|kontrolcifre)([\s\u00a0:#.=\-\u2010-\u2015"'\u2018\u2019\u201c\u201d\u00ab\u00bb]*(?:(?:is|er)[\s\u00a0:"'\u2018\u2019\u201c\u201d\u00ab\u00bb]+)?)\d(?:[\s\u00a0.\-\u2010-\u2015]?\d){2,3}(?!\d)/gi;
 /** A card's expiry named in text: "Expiry: 12/28", "exp. 12-2028", "udløb 12/28". */
-const EXPIRY = /\b((?:expiry|expiration|exp\.?)(?:\s*(?:date|dato))?|udløb(?:sdato)?|gyldig til)([\s\u00a0:#.=\-"']*(?:(?:is|er)[\s\u00a0:"']+)?)(?:\d{1,2}\s*[/.\-]\s*\d{2,4}|\d{4}\s*[/.\-]\s*\d{1,2})\b/gi;
+const EXPIRY = /\b((?:expiry|expiration|exp\.?)(?:\s*(?:date|dato))?|udløb(?:sdato)?|gyldig til)([\s\u00a0:#.=\-\u2010-\u2015"'\u2018\u2019\u201c\u201d\u00ab\u00bb]*(?:(?:is|er)[\s\u00a0:"'\u2018\u2019\u201c\u201d\u00ab\u00bb]+)?)(?:\d{1,2}\s*[/.\-\u2010-\u2015]\s*\d{2,4}|\d{4}\s*[/.\-\u2010-\u2015]\s*\d{1,2})(?!\d)/gi;
 
 /** Whether a run of digits passes the Luhn check, as every card number does. */
 function luhn(digits: string): boolean {
@@ -304,7 +306,7 @@ function isLink(word: string): boolean {
   for (let round = 0; round < 8; round += 1) {
     // As a browser reads it: backslashes are slashes, and "https:/host" is "https://host".
     const read = text.replace(/\\/g, '/');
-    if (/:\/\/|\/\/[a-z0-9-]|(?:^|[^a-z0-9])www\.|(?:^|[^a-z0-9])(?:https?|ftp):\//i.test(read)) return true;
+    if (/:\/\/|\/\/[a-z0-9-]|(?:^|[^a-z0-9])www\.|(?:^|[^a-z0-9])(?:https?|ftp):\S|^\.{0,2}\/[^\s/]+\/\S/i.test(read)) return true;
     const decoded = percentDecoded(htmlDecoded(text));
     if (decoded === text) return false;
     text = decoded;
@@ -339,22 +341,32 @@ function withoutQueries(value: string): string {
 function scrubText(original: string, depth = 0, inMoney = false, jsonBudget = 8): string {
   // JSON in a text (all of it, or from its first brace or bracket to its last) is scrubbed as data, field names and all,
   // and written out again. Its own budget: a text inside JSON inside a text is parsed too, up to eight levels.
-  if (jsonBudget > 0 && original.length <= 1_000_000) {
-    const start = original.search(/[{[]/);
-    const end = Math.max(original.lastIndexOf('}'), original.lastIndexOf(']'));
-    if (start >= 0 && end > start) {
-      try {
-        const data = JSON.parse(original.slice(start, end + 1)) as unknown;
-        const inner = JSON.stringify(scrubJson(data, inMoney, jsonBudget - 1));
-        return scrubText(original.slice(0, start), depth, inMoney, 0) + inner + scrubText(original.slice(end + 1), depth, inMoney, 0);
-      } catch {
-        // Not JSON: a text as any other.
+  // Larger than any real text in an answer: removed rather than looked through.
+  if (original.length > 1_000_000) return TEXT_REMOVED;
+  // Links and queries go first, whole, before anything else splits the text.
+  const unlinked = withoutQueries(original);
+  if (jsonBudget > 0) {
+    const spans = jsonSpans(unlinked);
+    if (spans.length > 0) {
+      let out = '';
+      let from = 0;
+      for (const [start, end] of spans) {
+        let inner: string | null = null;
+        try {
+          inner = JSON.stringify(scrubJson(JSON.parse(unlinked.slice(start, end)) as unknown, inMoney, jsonBudget - 1));
+        } catch {
+          // Not JSON: scrubbed with the text around it.
+        }
+        if (inner === null) continue;
+        out += scrubText(unlinked.slice(from, start), depth, inMoney, 0) + inner;
+        from = end;
       }
+      if (from > 0) return out + scrubText(unlinked.slice(from), depth, inMoney, 0);
     }
   }
-  // Links and queries are found on the text as it came; then HTML references and percent-encoding are written out (also
-  // nested) and HTML tags taken away, so no number hides behind them or is split by them.
-  let value = withoutQueries(original);
+  // Then HTML references and percent-encoding are written out (also nested) and HTML tags taken away, so no number
+  // hides behind them or is split by them.
+  let value = unlinked;
   for (let round = 0; round < 8; round += 1) {
     const decoded = percentDecoded(htmlDecoded(value));
     if (decoded === value) break;
@@ -366,6 +378,37 @@ function scrubText(original: string, depth = 0, inMoney = false, jsonBudget = 8)
     .replace(SECURITY_CODE, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(EXPIRY, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(CARD, run => (holdsCardNumber(run) ? NUMBER_REMOVED : run));
+}
+
+export const TEXT_REMOVED = '[text removed]';
+
+/**
+ * Where JSON objects and arrays stand in a text: each span from an opening brace or bracket to the one that closes it,
+ * strings and escapes respected, in one linear pass. Spans that never close are not spans.
+ */
+function jsonSpans(text: string): Array<[number, number]> {
+  const spans: Array<[number, number]> = [];
+  let depth = 0;
+  let start = -1;
+  let inString = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const char = text[i]!;
+    if (depth > 0 && inString) {
+      if (char === '\\') i += 1;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '{' || char === '[') {
+      if (depth === 0) start = i;
+      depth += 1;
+    } else if ((char === '}' || char === ']') && depth > 0) {
+      depth -= 1;
+      if (depth === 0) spans.push([start, i + 1]);
+    } else if (char === '"' && depth > 0) {
+      inString = true;
+    }
+  }
+  return spans;
 }
 
 /** A text without HTML comments ("<!-- … -->"), found by position, in linear time. An open one runs to the end. */
@@ -412,7 +455,9 @@ export function scrub(value: unknown, depth = 0, key = '', inMoney = false, json
     if (HIDDEN_NAME.test(plain)) continue;
     // A key that holds a number or a link the texts may not hold is left out with its value.
     if (scrubText(name) !== name) continue;
-    const money = inMoney || (namesMoney(name) && !ID_KEY.test(name));
+    // An id name with a scalar value is an id; with an object or a list below it, the name's money context applies.
+    const scalar = entry === null || typeof entry !== 'object';
+    const money = inMoney || (namesMoney(name) && (!ID_KEY.test(name) || !scalar));
     const kept = scrub(entry, depth + 1, name, money, jsonBudget);
     if (kept !== undefined) out[name] = kept;
   }
