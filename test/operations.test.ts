@@ -50,6 +50,8 @@ describe('prepare/commit ceremony', () => {
   });
 
   it('hashes independently of key order', () => {
+    // One moment for both, so the hash compares the bodies only.
+    const now = new Date('2026-11-27T10:00:00Z');
     const a = prepareOperation({
       capability: 'corpay_prepare_expense_amount_lines',
       method: 'PATCH',
@@ -57,7 +59,7 @@ describe('prepare/commit ceremony', () => {
       pathParams: { expenseId: 'E1' },
       body: { alpha: 1, beta: 2 },
       reason: 'r',
-    });
+    }, now);
     const b = prepareOperation({
       capability: 'corpay_prepare_expense_amount_lines',
       method: 'PATCH',
@@ -65,7 +67,7 @@ describe('prepare/commit ceremony', () => {
       pathParams: { expenseId: 'E1' },
       body: { beta: 2, alpha: 1 },
       reason: 'r',
-    });
+    }, now);
     expect(a.operationHash).toBe(b.operationHash);
   });
 

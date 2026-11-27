@@ -1,5 +1,6 @@
 import { z } from 'zod/v4';
 import type { GatewayQueryValue, GatewayWriteMethod } from './gateway-client.js';
+import { ACTIVITY, APPROVER, CATEGORY, CHANGED, dataOf, EXPENSE, EXPENSE_IN_LIST, LABEL_LIST, project, removeLinks, TEAM, VENDOR, type Shape } from './gateway-answers.js';
 
 /** What a tool may use of the client: reads, and (for a write tool) changes. */
 export interface GatewayClientView {
@@ -9,8 +10,12 @@ export interface GatewayClientView {
 
 /**
  * The tools of the embedded gateway (src/gateway.ts): narrow inputs, one
- * company (team) per instance, and every answer scrubbed of bank and card
- * numbers and of signed attachment links before it leaves.
+ * company (team) per instance, and typed answers: each tool passes on only the
+ * fields it knows (an allow-list per answer type, src/corpay/gateway-answers.ts),
+ * with no bank or card field in any list and every link removed. A change
+ * answers with what was done, built from its own input, never Corpay's body.
+ * The pattern scrub of bank and card numbers stays on free text as an extra
+ * guard.
  *
  * Reads: the team, expenses (bills, receipts, credit notes) with their
  * activity log and approvers, the coding vocabulary and vendors.
@@ -84,21 +89,18 @@ const shortText = (max: number) => z.string().trim().min(1).max(max);
 
 /** Field names whose values are never passed on: bank and card numbers, and payment instructions. */
 const HIDDEN_FIELD = /^(iban|bban|bic|swift|swiftcode|bankaccount|bankaccountnumber|accountnumber|registrationnumber|regnumber|cardnumber|pan|cvc|cvv|paymentinstructions?|paymentmethod|paymentmethods|bankdetails|bankinformation)$/;
-/** A link in a text: up to a space, a quote or an angle bracket. */
-const LINK = /https?:\/\/[^\s"'<>]+/gi;
-/** A signed link opens a file for anyone who holds it, so it is not passed on, also inside a longer text. */
-const SIGNED = /Signature=|X-Amz-|Key-Pair-Id=|[?&]sig=|[?&]token=/i;
-export const SIGNED_LINK_REMOVED = '[signed link removed]';
 /** Where an IBAN may start: a country code and check digits, in capitals or not, whatever stands before it. */
 const IBAN_START = /[A-Z]{2}\d{2}/gi;
 /** The letters and digits that may follow, in groups separated by any run of spaces. */
 const IBAN_REST = /^(?:[\s\u00a0]*[A-Z0-9]){11,30}/i;
 /** A domestic account or sort code named as one in the text: "Reg.nr. 1234", "Konto 1234567890", "Account no. 12-34-56". */
 const LABELLED_ACCOUNT =
-  /\b(reg(?:istrerings)?\.?\s*nr\.?|registreringsnummer|konto(?:nr\.?|nummer)?|account(?:\s*(?:no\.?|number|nr\.?))?|acct\.?(?:\s*no\.?)?|sort\s*code|routing(?:\s*(?:no\.?|number))?|bsb|aba)([\s\u00a0:#.=-]*)\d[\d\s\u00a0-]{2,}\d/gi;
+  /\b(reg(?:istrerings)?\.?\s*nr\.?|registreringsnummer|konto(?:nr\.?|nummer)?|account(?:\s*(?:no\.?|number|nr\.?))?|acct\.?(?:\s*no\.?)?|sort\s*code|routing(?:\s*(?:no\.?|number))?|bsb|aba)([\s\u00a0:#.=-]*)\d[\d\s\u00a0./_-]{2,}\d/gi;
 /** A run of 13 or more digits, in groups or not and whatever stands next to it: it holds a card number when part of it passes the Luhn check. */
-const CARD = /\d(?:[\s\u00a0-]*\d){12,}/g;
+const CARD = /\d(?:[\s\u00a0._/-]*\d){12,}/g;
 export const NUMBER_REMOVED = '[bank or card number removed]';
+/** Every dash and minus sign Unicode has, read as a hyphen between the groups of a number. */
+const DASHES = /[\p{Pd}−➖﹣－]/gu;
 
 /** Whether a run of digits passes the Luhn check, as every card number does. */
 function luhn(digits: string): boolean {
@@ -112,25 +114,6 @@ function luhn(digits: string): boolean {
     sum += d;
   }
   return sum % 10 === 0;
-}
-
-/** Whether a link is signed, also when its parameters are percent-encoded (once or several times). */
-function isSigned(link: string): boolean {
-  // An HTML-escaped separator (&amp;) is a separator too.
-  let text = link.replace(/&(?:amp|#0*38|#x0*26);/gi, '&');
-  for (let round = 0; round < 4; round += 1) {
-    if (SIGNED.test(text)) return true;
-    let decoded: string;
-    try {
-      decoded = decodeURIComponent(text);
-    } catch {
-      // Not decodable as a whole: decode what can be, so an encoded name is still seen.
-      decoded = text.replace(/%[0-9a-f]{2}/gi, code => String.fromCharCode(parseInt(code.slice(1), 16)));
-    }
-    if (decoded === text) return false;
-    text = decoded.replace(/&(?:amp|#0*38|#x0*26);/gi, '&');
-  }
-  return true;
 }
 
 /**
@@ -183,9 +166,13 @@ function withoutIbans(value: string): string {
   return out + value.slice(from);
 }
 
-/** A text with signed links, IBANs, named account numbers and card numbers removed; everything else as it is. */
+/** A text with links, IBANs, named account numbers and card numbers removed; everything else as it is. */
 function scrubText(value: string): string {
-  return withoutIbans(value.replace(LINK, link => (isSigned(link) ? SIGNED_LINK_REMOVED : link)))
+  // Read as written: compatibility forms as their plain ones (full-width digits are digits), and every dash a hyphen,
+  // so a number grouped with them is still found. Every link is removed whole first, so no partial replacement can leave
+  // a piece of one behind.
+  const plain = value.normalize('NFKC').replace(DASHES, '-');
+  return withoutIbans(removeLinks(plain))
     .replace(LABELLED_ACCOUNT, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(CARD, run => (holdsCardNumber(run) ? NUMBER_REMOVED : run));
 }
@@ -196,7 +183,7 @@ function scrubText(value: string): string {
  * when it holds no card number; that is the price of never letting one through.
  */
 function holdsCardNumber(run: string): boolean {
-  const digits = run.replace(/[\s\u00a0-]/g, '');
+  const digits = run.replace(/[\s\u00a0._/-]/g, '');
   for (let start = 0; start + 13 <= digits.length; start += 1) {
     for (let length = 13; length <= 19 && start + length <= digits.length; length += 1) {
       if (luhn(digits.slice(start, start + length))) return true;
@@ -226,6 +213,33 @@ export function scrub(value: unknown, depth = 0): unknown {
     if (kept !== undefined) out[key] = kept;
   }
   return out;
+}
+
+/** A page's counts. */
+const PAGE: Shape = { total: 'number', offset: 'number', count: 'number' };
+
+/** What a change answers, typed: what was done, from its own input. */
+function changed(value: Record<string, unknown>): Record<string, unknown> {
+  return (typed(value, CHANGED) as Record<string, unknown> | undefined) ?? {};
+}
+
+/** An answer typed by its shape: links removed from free text, then the pattern scrub as an extra guard. */
+export function typed(value: unknown, shape: Shape): unknown {
+  return project(value, shape, scrubText);
+}
+
+/**
+ * The list in an answer: the answer itself when it is one, its `data` when that is one, or the named field of the
+ * answer or of its `data`. An empty list when none is there.
+ */
+function listIn(answer: unknown, name: string): unknown[] {
+  if (Array.isArray(answer)) return answer;
+  if (!isRecord(answer)) return [];
+  if (Array.isArray(answer[name])) return answer[name] as unknown[];
+  const data = answer.data;
+  if (Array.isArray(data)) return data;
+  if (isRecord(data) && Array.isArray(data[name])) return data[name] as unknown[];
+  return [];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -316,10 +330,9 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
       const data = isRecord(answer) ? answer.data : undefined;
       const teams = isRecord(data) && Array.isArray(data.teams) ? data.teams : Array.isArray(data) ? data : [];
       const team = teams.find(entry => isRecord(entry) && entry.id === context.teamId);
-      return {
-        teamFound: team !== undefined,
-        team: isRecord(team) ? { id: context.teamId, name: typeof team.name === 'string' ? team.name : null } : null,
-      };
+      // Typed like any answer: a team id or name not of its kind is left out.
+      const found = isRecord(team) ? ((typed({ id: context.teamId, name: team.name }, { id: 'id', name: 'text' }) as Record<string, unknown>) ?? {}) : null;
+      return { teamFound: team !== undefined, team: found === null ? null : { name: null, ...found } };
     },
   },
   {
@@ -331,7 +344,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     upstream: [get('/v1/teams/{teamId}')],
     input: {},
     async run(client, _input, context) {
-      return scrub(await client.get(teamPath(context.teamId)));
+      return typed(dataOf(await client.get(teamPath(context.teamId)), 'team'), TEAM) ?? {};
     },
   },
   {
@@ -360,7 +373,13 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
         Offset: input.offset as number | undefined,
         Count: (input.count as number | undefined) ?? 25,
       };
-      return scrub(await client.get('/v2/expenses', query));
+      const answer = await client.get<unknown>('/v2/expenses', query);
+      const page = isRecord(answer) ? answer : {};
+      const data = dataOf(answer);
+      return {
+        ...(typed({ total: page.total, offset: page.offset, count: page.count }, PAGE) as object),
+        bills: typed(isRecord(data) ? data.bills : data, [EXPENSE_IN_LIST]) ?? [],
+      };
     },
   },
   {
@@ -372,7 +391,7 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     upstream: [get('/v3/expenses/{expenseId}')],
     input: { expenseId: id },
     async run(client, input, context) {
-      return scrub(await expenseInTeam(client, String(input.expenseId), context.teamId));
+      return typed(await expenseInTeam(client, String(input.expenseId), context.teamId), EXPENSE) ?? {};
     },
   },
   {
@@ -386,7 +405,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, input, context) {
       const expenseId = String(input.expenseId);
       await expenseInTeam(client, expenseId, context.teamId);
-      return scrub(await client.get(`/v2/expenses/${encodeURIComponent(expenseId)}/activities`));
+      const answer = await client.get<unknown>(`/v2/expenses/${encodeURIComponent(expenseId)}/activities`);
+      return { activities: typed(listIn(answer, 'activities'), [ACTIVITY]) };
     },
   },
   {
@@ -400,7 +420,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, input, context) {
       const expenseId = String(input.expenseId);
       await expenseInTeam(client, expenseId, context.teamId);
-      return scrub(await client.get(`/v2/expenses/${encodeURIComponent(expenseId)}/approvers`));
+      const answer = await client.get<unknown>(`/v2/expenses/${encodeURIComponent(expenseId)}/approvers`);
+      return { approvers: typed(listIn(answer, 'approvers'), [APPROVER]) };
     },
   },
   {
@@ -415,18 +436,15 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, _input, context) {
       const base = teamPath(context.teamId);
       const [categories, lists] = await Promise.all([client.get<unknown>(`${base}/categories`), client.get<unknown>(`${base}/lists`)]);
-      const catData = isRecord(categories) && isRecord(categories.data) ? categories.data.categories : undefined;
-      const listData = isRecord(lists) && isRecord(lists.data) ? lists.data.lists : undefined;
-      const summaries = Array.isArray(listData) ? listData.filter(isRecord) : [];
+      const summaries = listIn(lists, 'lists').filter(isRecord);
       const withLabels = [];
-      for (const list of summaries.slice(0, 50)) {
+      for (const list of summaries) {
         const listId = typeof list.id === 'string' && /^[A-Za-z0-9_-]{1,100}$/.test(list.id) ? list.id : undefined;
         if (!listId) continue;
         const labels = await client.get<unknown>(`${base}/lists/${encodeURIComponent(listId)}/labels`);
-        const labelData = isRecord(labels) && isRecord(labels.data) ? (labels.data.labels ?? labels.data) : labels;
-        withLabels.push({ id: listId, name: list.name ?? null, type: list.type ?? null, labels: labelData ?? [] });
+        withLabels.push({ ...list, labels: listIn(labels, 'labels') });
       }
-      return scrub({ categories: Array.isArray(catData) ? catData : [], lists: withLabels });
+      return { categories: typed(listIn(categories, 'categories'), [CATEGORY]), lists: typed(withLabels, [LABEL_LIST]) };
     },
   },
   {
@@ -441,12 +459,11 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
       count: z.number().int().min(1).max(100).optional(),
     },
     async run(client, input, context) {
-      return scrub(
-        await client.get(`/v2/teams/${encodeURIComponent(context.teamId)}/vendors`, {
-          Offset: input.offset as number | undefined,
-          Count: input.count as number | undefined,
-        }),
-      );
+      const answer = await client.get<unknown>(`/v2/teams/${encodeURIComponent(context.teamId)}/vendors`, {
+        Offset: input.offset as number | undefined,
+        Count: input.count as number | undefined,
+      });
+      return { vendors: typed(listIn(answer, 'vendors'), [VENDOR]) };
     },
   },
   {
@@ -458,7 +475,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     upstream: [get('/v2/teams/{teamId}/vendors/{vendorId}')],
     input: { vendorId: id },
     async run(client, input, context) {
-      return scrub(await client.get(`/v2/teams/${encodeURIComponent(context.teamId)}/vendors/${encodeURIComponent(String(input.vendorId))}`));
+      const answer = await client.get<unknown>(`/v2/teams/${encodeURIComponent(context.teamId)}/vendors/${encodeURIComponent(String(input.vendorId))}`);
+      return typed(dataOf(answer, 'vendor'), VENDOR) ?? {};
     },
   },
   {
@@ -485,8 +503,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
       // Corpay refuses `add` on a field that holds a value and `replace` on one that does not.
       if (input.categoryId !== undefined) patch.push({ op: has(current.category) ? 'replace' : 'add', path: '/categoryId', value: input.categoryId });
       if (input.labelIds !== undefined) patch.push({ op: has(current.labels) ? 'replace' : 'add', path: '/labels', value: input.labelIds });
-      const answer = await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}`, patch, 'application/json-patch+json');
-      return scrub(answer ?? { updated: true });
+      await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}`, patch, 'application/json-patch+json');
+      return changed({ coded: true, expenseId, categoryId: input.categoryId, labelIds: input.labelIds });
     },
   },
   {
@@ -520,8 +538,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
         ...(line.categoryId !== undefined ? { category: line.categoryId } : {}),
         labels: line.labels ?? [],
       }));
-      const answer = await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/amountlines`, { amountLines: lines });
-      return scrub(answer ?? { updated: true });
+      await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/amountlines`, { amountLines: lines });
+      return changed({ linesSet: true, expenseId, lines: lines.length, total: lines.reduce((sum, line) => sum + line.amount, 0) });
     },
   },
   {
@@ -535,8 +553,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, input, context) {
       const expenseId = String(input.expenseId);
       await expenseInTeam(client, expenseId, context.teamId);
-      const answer = await client.send('POST', `/v2/expenses/${encodeURIComponent(expenseId)}/activities`, { body: input.comment, type: 'Text' });
-      return scrub(answer ?? { added: true });
+      await client.send('POST', `/v2/expenses/${encodeURIComponent(expenseId)}/activities`, { body: input.comment, type: 'Text' });
+      return changed({ commented: true, expenseId });
     },
   },
   {
@@ -563,7 +581,10 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, input, context) {
       const vendor = Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
       if (typeof vendor.country === 'string') vendor.country = vendor.country.toUpperCase();
-      return scrub((await client.send('POST', `/v2/teams/${encodeURIComponent(context.teamId)}/vendors`, { vendors: [vendor] })) ?? { created: true });
+      const answer = await client.send<unknown>('POST', `/v2/teams/${encodeURIComponent(context.teamId)}/vendors`, { vendors: [vendor] });
+      // Corpay's answer is passed on only as the vendors it names, typed; without one, what was asked for, typed too.
+      const named = typed(listIn(answer, 'vendors'), [VENDOR]) as unknown[];
+      return { created: true, vendors: named.length > 0 ? named : typed([vendor], [VENDOR]) };
     },
   },
   {
@@ -576,7 +597,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     input: { vendorId: id, externalId: shortText(100), source: shortText(50) },
     async run(client, input, context) {
       const path = `/v2/teams/${encodeURIComponent(context.teamId)}/vendors/${encodeURIComponent(String(input.vendorId))}/external-id`;
-      return scrub((await client.send('PATCH', path, { externalId: input.externalId, source: input.source })) ?? { updated: true });
+      await client.send('PATCH', path, { externalId: input.externalId, source: input.source });
+      return changed({ linked: true, vendorId: input.vendorId, externalId: input.externalId, source: input.source });
     },
   },
   {
@@ -590,7 +612,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, input, context) {
       const expenseId = String(input.expenseId);
       await expenseInTeam(client, expenseId, context.teamId);
-      return scrub((await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/decline`, { note: input.note })) ?? { declined: true });
+      await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/decline`, { note: input.note });
+      return changed({ declined: true, expenseId });
     },
   },
   {
@@ -606,7 +629,8 @@ export const GATEWAY_TOOLS: readonly GatewayTool[] = [
     async run(client, input, context) {
       const expenseId = String(input.expenseId);
       await expenseInTeam(client, expenseId, context.teamId);
-      return scrub((await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/approve`)) ?? { approved: true });
+      await client.send('PATCH', `/v2/expenses/${encodeURIComponent(expenseId)}/approve`);
+      return changed({ approved: true, expenseId });
     },
   },
 ];

@@ -1,5 +1,80 @@
 # Changelog
 
+## 2.0.0
+
+Typed answers in the embeddable gateway (`./gateway`). The answers of the
+gateway's tools change shape, so this is a major version. The MCP server and
+its tools are unchanged.
+
+- Each gateway tool passes on only the fields it knows: an allow-list per
+  answer type (team, expense, expense in a list, activity, approver,
+  category, label list, vendor, and what a change did). A field that is not
+  listed is left out, whatever its name or value. No bank or card field is in
+  any list: payment methods, creditors, payment instructions and bank
+  accounts never leave.
+- Every value is checked for its kind: an id, a code, a company or VAT
+  number, a date, a number or true/false that is not of its form is left out,
+  and so is an id or a code that holds an account or card number or a host
+  name. A number of a trillion or more is left out, never turned into text.
+- Links are never passed on: attachment URLs, websites and logos are not
+  listed, and every word of a text (everything between two spaces) that is
+  or holds a link is replaced by `[link removed]`, whole: a word with `//` or `www.`, a scheme of any
+  length with something after its colon (`https:`, `mailto:x`, `sms:1234`,
+  `webcal:x`), a host name in any script (`t.co`, `example.com`,
+  `customer.finance`, `faktura.pdf`, `xn--…`; a host name with a path
+  whatever it ends in), an IPv4 address (also with leading zeros, hex parts
+  or as a hex number, and with a port), an IPv6 address with or without brackets, a query
+  (`?a=b`) or a path (`localhost/x`, `127.1/x`; also `faktura/kreditnota`,
+  where a part between slashes is longer than four letters). Full-width and
+  ideographic dots count as dots. A few listed abbreviations (`Reg.nr.`,
+  `Kto.nr.`, `CVR.nr.` …), abbreviations whose ending is no top-level domain
+  (`f.eks.`, `inkl.`) or a single letter (`e.g.`), and short words with a
+  slash such as `A/S`, `kr/md` and `27/11/2026`, stay, and so do times (`12:34:56`) and plain numbers
+  (`127.1`), which are no links without a scheme, `//` or a path. In an
+  error, links are removed whole before secrets are redacted. A link split
+  by a tab or a line break (`https:<tab>//host`, `webcal:<line break>…`) is
+  removed whole too, by `//`, `www.` or a known scheme in any of the words
+  before a break; any other word and a
+  colon at the end of a line (`Note:`) is no link.
+- An answer's text is built from its final, scrubbed data, so the text and
+  `structuredContent` always say the same. This holds for error answers too, and
+  replaces the `[signed link removed]` marker of 1.3. The scan is linear in
+  the length of the text.
+- Texts are never cut, so nothing that is to be removed is ever cut in two
+  and missed.
+- A number or true/false that the secret redaction would turn into a marker
+  is left out of the answer, so every field keeps its type.
+- The pattern scrub of bank and card numbers stays on free text, as an extra
+  guard; it now reads text in Unicode's compatibility form (NFKC: full-width
+  digits are digits) with every dash as a hyphen, and finds card and named
+  account numbers grouped with dots, slashes, underscores or any dash.
+- `list_coding_options` passes on every label list (no longer the first 50).
+- A change answers with what was done, built from its own input and typed,
+  never Corpay One's body; a new vendor is answered with the vendors Corpay
+  One names, typed.
+
+### Known limits of the free-text guard
+
+The allow-lists decide what leaves; the link and number scrub of free text
+(notes, comments, names) is an extra guard and recognises links by their
+form. Forms it does not recognise yet, found in review: host names made of
+symbols or emoji (`☃.net/a`, `💩.la`) and an IPv4 address in another spelling
+with a trailing dot before its port (`0x7f000001.:8080`, `0177.0.0.1.:8080`).
+
+### Migrating from 1.3
+
+| Tool | 1.3 answer | 2.0 answer |
+| --- | --- | --- |
+| `get_company` | `{ data: { team } }` | the team |
+| `get_vendor` | `{ data: vendor }` | the vendor |
+| `get_expense` | the expense | the expense (typed) |
+| `list_expenses` | `{ total, offset, count, data: { bills } }` | `{ total, offset, count, bills }` |
+| `get_expense_activities` | Corpay One's body | `{ activities }` |
+| `get_expense_approvers` | an array | `{ approvers }` |
+| `list_vendors` | `{ data: [vendors] }` | `{ vendors }` |
+| `list_coding_options` | `{ categories, lists }` | the same, typed |
+| changes | Corpay One's body, or `{ updated: true }` and the like | `{ coded \| linesSet \| commented \| declined \| approved \| linked: true, … }` with the ids from the input; `create_vendor`: `{ created: true, vendors }` |
+
 ## 1.3.0
 
 The embeddable gateway (`./gateway`) is rebuilt for hosts that serve several

@@ -257,15 +257,16 @@ describe('calls', () => {
         data: { id: 'V1', name: 'A', iban: 'DK5000400440116243', bankAccount: { regNumber: '1234' }, logo: 'https://files.example/a.png' },
       },
       'GET /external/v3/expenses/E1': {
-        data: { ...OWN_EXPENSE.data, note: 'Invoice: https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K attached; pay to IBAN DK5000400440116243, card 4111 1111 1111 1111, order 987654321098', attachments: [{ id: 'A1', url: 'https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K' }] },
+        data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value: 'Invoice: https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K attached; pay to IBAN DK5000400440116243, card 4111 1111 1111 1111, order 987654321098' }], attachments: [{ id: 'A1', url: 'https://attachments.corpayone.com/x.pdf?Expires=1&Signature=abc&Key-Pair-Id=K' }] },
       },
     });
     const gw = gateway(impl);
     const vendor = await gw.callTool('get_vendor', { vendorId: 'V1' });
-    expect(vendor.structuredContent).toEqual({ data: { id: 'V1', name: 'A', logo: 'https://files.example/a.png' } });
+    expect(vendor.structuredContent).toEqual({ id: 'V1', name: 'A' });
     const expense = await gw.callTool('get_expense', { expenseId: 'E1' });
     expect(JSON.stringify(expense)).not.toContain('Signature');
-    expect(JSON.stringify(expense)).toContain('Invoice: [signed link removed] attached; pay to IBAN [bank or card number removed], card [bank or card number removed], order 987654321098');
+    expect(expense.structuredContent).toMatchObject({ attachments: [{ id: 'A1' }] });
+    expect(JSON.stringify(expense)).toContain('Invoice: [link removed] attached; pay to IBAN [bank or card number removed], card [bank or card number removed], order 987654321098');
   });
 
   it('scrubs every answer, also the team name in the connection check', async () => {
@@ -286,7 +287,8 @@ describe('calls', () => {
     for (const piece of ['0440', '4111', '%73ig', 'NWBK', '5555', '9876', '3456789012', 'sig=abcdef', '1331926819', '1234567890', '622123']) expect(company).not.toContain(piece);
     // Letters and digits that fail the IBAN check are kept.
     expect(company).toContain('ab12cdefghijklmnop');
-    expect(company).toContain('"small":42');
+    // Fields the team's answer type does not list are left out, whatever they hold.
+    for (const field of ['small', 'card', 'big']) expect(company).not.toContain(`"${field}"`);
     // An error that quotes the input is scrubbed too.
     const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'https://x.example/a?Signature=abc': 1 }));
     expect(invalid).not.toContain('Signature');
@@ -357,4 +359,501 @@ describe('renewal', () => {
       expect(calls.some(call => call.url.includes('/external/'))).toBe(false);
     });
   }
+});
+
+describe('typed answers', () => {
+  const BANK = 'DK5000400440116243';
+  const FULL_EXPENSE = {
+    data: {
+      id: 'E1',
+      owner: { user: { id: 'U1' }, team: { id: TEAM } },
+      number: 1042,
+      amount: 1240000,
+      currency: 'DKK',
+      dueDate: '2026-12-01T00:00:00Z',
+      state: 'Awaiting',
+      reference: 'Faktura 77 se www.example.com/f',
+      paymentMethod: { id: 'P1', type: 'BankTransfer', iban: BANK },
+      creditor: { id: 'CR1', accountNumber: '12345678' },
+      ripePaymentId: 'R1',
+      fx: { homeAmount: 1240000, homeCurrency: 'DKK', paymentInstructionType: 'Iban' },
+      attachments: [{ id: 'A1', url: 'https://attachments.example/a.pdf', isOriginal: true }],
+      lines: [{ id: 'L1', amount: 1240000, note: 'Se https://x.example/l', bankAccount: BANK }],
+      vendor: { id: 'V1', name: 'Leverandør A/S', iban: BANK, website: 'https://leverandoer.example' },
+      unknownNew: 'value',
+      number2: 4111111111111111,
+    },
+  };
+
+  it('passes on only the listed fields of an expense: no payment method, creditor, payment instruction or link', async () => {
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': FULL_EXPENSE });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toEqual({
+      id: 'E1',
+      owner: { user: { id: 'U1' }, team: { id: TEAM } },
+      number: 1042,
+      amount: 1240000,
+      currency: 'DKK',
+      dueDate: '2026-12-01T00:00:00Z',
+      state: 'Awaiting',
+      reference: 'Faktura 77 se [link removed]',
+      fx: { homeAmount: 1240000, homeCurrency: 'DKK' },
+      attachments: [{ id: 'A1', isOriginal: true }],
+      lines: [{ id: 'L1', amount: 1240000, note: 'Se [link removed]' }],
+      vendor: { id: 'V1', name: 'Leverandør A/S' },
+    });
+    for (const piece of [BANK, 'paymentMethod', 'creditor', 'ripePaymentId', 'paymentInstructionType', 'http', 'unknownNew', '4111']) {
+      expect(JSON.stringify(result)).not.toContain(piece);
+    }
+  });
+
+  it('leaves out a value that is not of its kind', async () => {
+    const { impl } = stub({
+      'GET /external/v3/expenses/E1': {
+        data: {
+          id: 'E1',
+          owner: { team: { id: TEAM } },
+          amount: '12,00',
+          currency: 'https://x.example',
+          dueDate: 'snart',
+          number: 'NaN',
+          category: { id: 'id med mellemrum', number: '4111111111111111' },
+          vendor: { id: 'DK5000400440116243', name: 'Leverandør A/S' },
+          item: { id: 4111111111111111, name: 'Vare' },
+          type: 'www.example.com',
+        },
+      },
+    });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toEqual({ id: 'E1', owner: { team: { id: TEAM } }, category: {}, vendor: { name: 'Leverandør A/S' }, item: { name: 'Vare' } });
+  });
+
+  it('types every read: expenses, activities, approvers, coding options and vendors', async () => {
+    const vendor = { id: 'V1', name: 'Leverandør A/S', identification: '12345678', website: 'https://leverandoer.example', iban: BANK, bankAccounts: [{ number: BANK }] };
+    const { impl } = stub({
+      'GET /external/v2/expenses': { total: 1, offset: 0, count: 25, data: { bills: [{ ...FULL_EXPENSE.data, attachments: undefined }] } },
+      'GET /external/v3/expenses/E1': FULL_EXPENSE,
+      'GET /external/v2/expenses/E1/activities': {
+        activities: [{ activityType: 'Text', body: `Betal til ${BANK} via https://pay.example`, userId: 'U1', created: '2026-11-20T10:00:00Z', link: 'https://x.example' }],
+      },
+      'GET /external/v2/expenses/E1/approvers': [{ id: 'U2', email: 'a@example.com' }],
+      'GET /external/v1/teams/team-own/categories': { data: { categories: [{ id: 'C1', name: 'Varekøb', number: '1310', color: '#fff' }] } },
+      'GET /external/v1/teams/team-own/lists': { data: { lists: [{ id: 'LS1', name: 'Projekter', type: 'Custom', onBills: true }] } },
+      'GET /external/v1/teams/team-own/lists/LS1/labels': { data: { labels: [{ id: 'LB1', value: 'Projekt 7', listId: 'LS1', secret: 'x' }] } },
+      'GET /external/v2/teams/team-own/vendors': { data: [vendor] },
+    });
+    const gw = gateway(impl);
+    const list = await gw.callTool('list_expenses', {});
+    expect(list.structuredContent).toMatchObject({
+      total: 1,
+      offset: 0,
+      count: 25,
+      bills: [{ id: 'E1', amount: 1240000, vendor: { id: 'V1', name: 'Leverandør A/S' } }],
+    });
+    const activities = await gw.callTool('get_expense_activities', { expenseId: 'E1' });
+    expect(activities.structuredContent).toEqual({
+      activities: [{ activityType: 'Text', body: 'Betal til [bank or card number removed] via [link removed]', userId: 'U1', created: '2026-11-20T10:00:00Z' }],
+    });
+    expect((await gw.callTool('get_expense_approvers', { expenseId: 'E1' })).structuredContent).toEqual({ approvers: [{ id: 'U2' }] });
+    expect((await gw.callTool('list_coding_options', {})).structuredContent).toEqual({
+      categories: [{ id: 'C1', name: 'Varekøb', number: '1310' }],
+      lists: [{ id: 'LS1', name: 'Projekter', type: 'Custom', labels: [{ id: 'LB1', value: 'Projekt 7', listId: 'LS1' }] }],
+    });
+    const vendors = await gw.callTool('list_vendors', {});
+    expect(vendors.structuredContent).toEqual({ vendors: [{ id: 'V1', name: 'Leverandør A/S', identification: '12345678' }] });
+    for (const result of [list, activities, vendors]) {
+      for (const piece of [BANK, 'http', 'paymentMethod', 'website']) expect(JSON.stringify(result)).not.toContain(piece);
+    }
+  });
+
+  it("answers a change with what was done, built from its own input, never Corpay's body", async () => {
+    const echo = { data: { id: 'E1', iban: BANK, url: 'https://x.example/signed?Signature=abc', paymentMethod: { iban: BANK } } };
+    const { impl } = stub({
+      'GET /external/v3/expenses/E1': OWN_EXPENSE,
+      'PATCH /external/v2/expenses/E1': echo,
+      'PATCH /external/v2/expenses/E1/amountlines': echo,
+      'POST /external/v2/expenses/E1/activities': echo,
+      'PATCH /external/v2/expenses/E1/decline': echo,
+      'PATCH /external/v2/expenses/E1/approve': echo,
+      'PATCH /external/v2/teams/team-own/vendors/V1/external-id': echo,
+      'POST /external/v2/teams/team-own/vendors': { data: [{ id: 'V9', name: 'Ny A/S', iban: BANK, website: 'https://ny.example' }] },
+    });
+    const gw = gateway(impl);
+    const answers = {
+      coded: await gw.callTool('set_expense_coding', { expenseId: 'E1', categoryId: 'C1' }),
+      lines: await gw.callTool('set_expense_amount_lines', { expenseId: 'E1', amountLines: [{ amount: 600 }, { amount: 400 }] }),
+      comment: await gw.callTool('comment_on_expense', { expenseId: 'E1', comment: 'Tjek' }),
+      declined: await gw.callTool('decline_expense', { expenseId: 'E1', note: 'Forkert' }),
+      approved: await gw.callTool('approve_expense', { expenseId: 'E1' }),
+      linked: await gw.callTool('set_vendor_external_id', { vendorId: 'V1', externalId: '2001', source: 'e-conomic' }),
+      created: await gw.callTool('create_vendor', { name: 'Ny A/S', website: 'https://ny.example' }),
+    };
+    expect(answers.coded.structuredContent).toEqual({ coded: true, expenseId: 'E1', categoryId: 'C1' });
+    expect(answers.lines.structuredContent).toEqual({ linesSet: true, expenseId: 'E1', lines: 2, total: 1000 });
+    expect(answers.comment.structuredContent).toEqual({ commented: true, expenseId: 'E1' });
+    expect(answers.declined.structuredContent).toEqual({ declined: true, expenseId: 'E1' });
+    expect(answers.approved.structuredContent).toEqual({ approved: true, expenseId: 'E1' });
+    expect(answers.linked.structuredContent).toEqual({ linked: true, vendorId: 'V1', externalId: '2001', source: 'e-conomic' });
+    expect(answers.created.structuredContent).toEqual({ created: true, vendors: [{ id: 'V9', name: 'Ny A/S' }] });
+    for (const result of Object.values(answers)) {
+      for (const piece of [BANK, 'http', 'Signature', 'paymentMethod']) expect(JSON.stringify(result)).not.toContain(piece);
+    }
+  });
+});
+
+describe('typed answers: the edges', () => {
+  it('removes every kind of link, also in an error that quotes the input', async () => {
+    const { impl } = stub({
+      'GET /external/v3/expenses/E1': {
+        data: {
+          ...OWN_EXPENSE.data,
+          notes: [{ id: 'N1', value: 'Se [faktura](//pay.example/invoice), skriv til mailto:bogholderi@example.com eller ftp://files.example/a' }],
+        },
+      },
+    });
+    const gw = gateway(impl);
+    const expense = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(expense.structuredContent).toMatchObject({
+      notes: [{ id: 'N1', value: 'Se [link removed] skriv til [link removed] eller [link removed]' }],
+    });
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'https://plain.example/a': 1, '//other.example/b': 2 }));
+    for (const piece of ['plain.example', 'other.example']) expect(invalid).not.toContain(piece);
+  });
+
+  it('removes a card number written with dots or slashes', async () => {
+    const { impl } = stub({
+      'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value: 'Kort 4111.1111.1111.1111 og 5555/5555/5555/4444' }] } },
+    });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    for (const piece of ['4111', '5555']) expect(JSON.stringify(result)).not.toContain(piece);
+  });
+
+  it('types the answer of a change too: an id that is not of its kind is left out', async () => {
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': OWN_EXPENSE, 'PATCH /external/v2/expenses/E1': {} });
+    const result = await gateway(impl).callTool('set_expense_coding', { expenseId: 'E1', categoryId: '4111111111111111', labelIds: ['L1'] });
+    expect(result.structuredContent).toEqual({ coded: true, expenseId: 'E1', labelIds: ['L1'] });
+  });
+
+  it('keeps company and VAT numbers with their digits', async () => {
+    const { impl } = stub({
+      'GET /external/v1/teams/team-own': { data: { team: { id: TEAM, name: 'Demo Byg ApS', vat: 'GB123456789', countryCode: 'GB' } } },
+      'GET /external/v2/teams/team-own/vendors/V1': { data: { id: 'V1', name: 'A', identification: 'NL123456789B01' } },
+    });
+    const gw = gateway(impl);
+    expect((await gw.callTool('get_company', {})).structuredContent).toEqual({ id: TEAM, name: 'Demo Byg ApS', vat: 'GB123456789', countryCode: 'GB' });
+    expect((await gw.callTool('get_vendor', { vendorId: 'V1' })).structuredContent).toEqual({ id: 'V1', name: 'A', identification: 'NL123456789B01' });
+  });
+
+  it('passes on a long list whole', async () => {
+    const labels = Array.from({ length: 1500 }, (_, i) => ({ id: `LB${i}`, value: `Projekt ${i}`, listId: 'LS1' }));
+    const { impl } = stub({
+      'GET /external/v1/teams/team-own/categories': { data: { categories: [] } },
+      'GET /external/v1/teams/team-own/lists': { data: { lists: [{ id: 'LS1', name: 'Projekter' }] } },
+      'GET /external/v1/teams/team-own/lists/LS1/labels': { data: { labels } },
+    });
+    const result = (await gateway(impl).callTool('list_coding_options', {})).structuredContent as { lists: Array<{ labels: unknown[] }> };
+    expect(result.lists[0]!.labels).toHaveLength(1500);
+  });
+
+  it('keeps a number a number: one too large to be an amount is left out, never turned into text', async () => {
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': OWN_EXPENSE, 'PATCH /external/v2/expenses/E1/amountlines': {} });
+    const result = await gateway(impl).callTool('set_expense_amount_lines', { expenseId: 'E1', amountLines: [{ amount: 1_000_000_000_000 }, { amount: 9 }] });
+    expect(result.structuredContent).toEqual({ linesSet: true, expenseId: 'E1', lines: 2 });
+  });
+});
+
+describe('typed answers: the edges, second round', () => {
+  const TOKEN_IN_LINK = ['to', 'ken=', 'Q9w8E7r6T5y4'].join('');
+
+  it('removes a link whole: parentheses in its path, a host without a dot, a scheme without "//"', async () => {
+    const value = `A https://pay.example/(invoice)?${TOKEN_IN_LINK} B //localhost/invoice?${TOKEN_IN_LINK} C webcal:private-calendar D Note: tekst kl. 14:30`;
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const gw = gateway(impl);
+    const result = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'A [link removed] B [link removed] C [link removed] D Note: tekst kl. 14:30' }] });
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', [`//localhost/a?${TOKEN_IN_LINK}`]: 1, 'webcal:private': 2 }));
+    for (const piece of ['Q9w8E7r6T5y4', 'localhost', 'private']) expect(invalid).not.toContain(piece);
+  });
+
+  it('removes a named account number grouped with dots or slashes', async () => {
+    const value = 'Konto 12.34.56 og Account no. 12/34/56 og Account no. 1234.567890';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const text = JSON.stringify(await gateway(impl).callTool('get_expense', { expenseId: 'E1' }));
+    for (const piece of ['12.34', '12/34', '567890']) expect(text).not.toContain(piece);
+  });
+
+  it('passes on every label list, however many', async () => {
+    const lists = Array.from({ length: 60 }, (_, i) => ({ id: `LS${i}`, name: `Liste ${i}` }));
+    const routes: Record<string, unknown> = {
+      'GET /external/v1/teams/team-own/categories': { data: { categories: [] } },
+      'GET /external/v1/teams/team-own/lists': { data: { lists } },
+    };
+    for (const list of lists) routes[`GET /external/v1/teams/team-own/lists/${list.id}/labels`] = { data: { labels: [] } };
+    const { impl } = stub(routes);
+    const result = (await gateway(impl).callTool('list_coding_options', {})).structuredContent as { lists: unknown[] };
+    expect(result.lists).toHaveLength(60);
+  });
+
+  it('types the connection check: a team id not of its kind is left out', async () => {
+    const odd = '1234567890123';
+    const { impl } = stub({ 'GET /external/v1/teams': { data: { teams: [{ id: odd, name: 'Demo Byg ApS' }] } } });
+    const result = await gateway(impl, { teamId: odd }).callTool('check_connection', {});
+    expect(result.structuredContent).toEqual({ teamFound: true, team: { name: 'Demo Byg ApS' } });
+  });
+});
+
+describe('typed answers: the edges, third round', () => {
+  it('removes a link whose scheme is followed by digits, also in an error', async () => {
+    const value = 'Skriv sms:12345678?body=fortroligt eller se http:127.0.0.1/private?ticket=ABCD kl. 14:30';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const gw = gateway(impl);
+    const result = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'Skriv [link removed] eller se [link removed] kl. 14:30' }] });
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'sms:12345678?body=fortroligt': 1, 'http:127.0.0.1/private': 2 }));
+    for (const piece of ['fortroligt', '127.0.0.1', 'private']) expect(invalid).not.toContain(piece);
+  });
+
+  it('removes a card number that stands where a long text is cut', async () => {
+    const value = `${'x'.repeat(19_988)}4111111111111111`;
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const text = JSON.stringify(await gateway(impl).callTool('get_expense', { expenseId: 'E1' }));
+    expect(text).not.toContain('4111');
+  });
+
+  it('keeps a time with fractions of a second', async () => {
+    const dueDate = '2026-11-27T12:34:56.1234567Z';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, dueDate, issueDate: '2026-11-01T08:00:00+01:00' } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ dueDate, issueDate: '2026-11-01T08:00:00+01:00' });
+  });
+
+  it('leaves out a number that redaction would turn into text, so every field keeps its type', async () => {
+    const secret = `${fake('withdigits', 12)}124000${fake('rest', 10)}`;
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, amount: 1240000, number: 7 } } });
+    const result = await gateway(impl, { clientSecret: secret }).callTool('get_expense', { expenseId: 'E1' });
+    const content = result.structuredContent as Record<string, unknown>;
+    expect(content.amount).toBeUndefined();
+    expect(content.number).toBe(7);
+    expect(JSON.stringify(result)).not.toContain('124000');
+  });
+});
+
+describe('typed answers: the edges, fourth round', () => {
+  it('removes a link whole, apostrophes in its path too, also in an error', async () => {
+    const signed = ['https://attachments.example/O', "'", 'Reilly.pdf?Sig', 'nature=Fortrolig&Key-Pair-Id=K'].join('');
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value: `Bilag ${signed} her` }] } } });
+    const gw = gateway(impl);
+    const result = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'Bilag [link removed] her' }] });
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', [signed]: 1 }));
+    for (const piece of ['Reilly', 'Fortrolig']) expect(invalid).not.toContain(piece);
+  });
+
+  it('removes a bare host name with a path or a common ending, also in an error', async () => {
+    const value = 'Se example.com/invoice?ticket=privat, eller leverandoer.dk, f.eks. kl. 14.30, bl.a. 1.240,00 kr.';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const gw = gateway(impl);
+    const result = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'Se [link removed] eller [link removed] f.eks. kl. 14.30, bl.a. 1.240,00 kr.' }] });
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'example.com/invoice?ticket=privat': 1 }));
+    expect(invalid).not.toContain('privat');
+  });
+
+  it('never cuts a long text, so a long token is still seen and redacted whole', async () => {
+    const token = ['eyJhbGciOiJIUzI1NiJ9', `eyJzdWIiOiJ${'Q'.repeat(20_050)}`, 'c2lnbmF0dXJlLXZhbHVl'].join('.');
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value: `Token ${token}` }] } } });
+    const text = JSON.stringify(await gateway(impl).callTool('get_expense', { expenseId: 'E1' }));
+    expect(text).not.toContain('QQQQQQQQ');
+    expect(text).not.toContain('eyJhbGciOiJIUzI1NiJ9');
+  });
+});
+
+describe('typed answers: the edges, fifth round', () => {
+  it('removes IP addresses, any host name and a signed link with an apostrophe, also in an error', async () => {
+    const value = "Se 192.168.1.20/invoice?ticket=PRIVAT og customer.finance og kunde.nr/sti?x=1, Reg.nr. 1234, f.eks. her";
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const gw = gateway(impl);
+    const result = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({
+      notes: [{ value: 'Se [link removed] og [link removed] og [link removed] Reg.nr. [bank or card number removed], f.eks. her' }],
+    });
+    const signed = ['https://pay.example/invoice?Sig', "nature=abc'PRIVATE_PATH&Expires=123"].join('');
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', [signed]: 1, '192.168.1.20/x': 2 }));
+    for (const piece of ['PRIVATE_PATH', 'Expires', '192.168']) expect(invalid).not.toContain(piece);
+  });
+
+  it('removes links in time linear in the length of the text', async () => {
+    const { removeLinks } = await import('../src/corpay/gateway-answers.js');
+    for (const text of [`${'a.'.repeat(100_000)}!`, `${'-.'.repeat(100_000)}x`, `${'a:'.repeat(100_000)}`, `${'1.'.repeat(100_000)}`]) {
+      const started = performance.now();
+      removeLinks(text);
+      expect(performance.now() - started).toBeLessThan(500);
+    }
+  });
+});
+
+describe('typed answers: the edges, sixth round', () => {
+  it('removes short, internationalised and long-scheme links, also in an error', async () => {
+    const long = `${'a'.repeat(40)}:private-calendar?ticket=PRIVAT1`;
+    const value = `A t.co B x.com C example.mm D xn--e1afmkfd.xn--p1ai/private?ticket=PRIVAT2 E 中国.公司/private?ticket=PRIVAT3 F ${long} G e.g. f.eks. bl.a. Reg.nr. og 1.240,00 kr.`;
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const gw = gateway(impl);
+    const result = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({
+      notes: [{ value: 'A [link removed] B [link removed] C [link removed] D [link removed] E [link removed] F [link removed] G e.g. f.eks. bl.a. Reg.nr. og 1.240,00 kr.' }],
+    });
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', '中国.公司/private?ticket=PRIVAT3': 1, [long]: 2, 't.co': 3 }));
+    for (const piece of ['PRIVAT', '中国', 't.co']) expect(invalid).not.toContain(piece);
+  });
+});
+
+describe('typed answers: the edges, seventh round', () => {
+  it('removes paths, queries, IPv6 literals and full-width dots, and keeps short plain words with a slash', async () => {
+    const value =
+      'A example。com/invoice?ticket=HEMMELIG1 B localhost/invoice C 127.1/invoice D [::1]/invoice E intern?ticket=HEMMELIG2 F faktura/kreditnota G Byg A/S, 27/11/2026, 500 kr/md. Leverandør A/S.';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const gw = gateway(impl);
+    const result = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({
+      notes: [
+        {
+          value:
+            'A [link removed] B [link removed] C [link removed] D [link removed] E [link removed] F [link removed] G Byg A/S, 27/11/2026, 500 kr/md. Leverandør A/S.',
+        },
+      ],
+    });
+    const invalid = JSON.stringify(
+      await gw.callTool('get_vendor', { vendorId: 'V1', 'example。com/invoice?ticket=HEMMELIG1': 1, 'localhost/invoice': 2, '[::1]/x': 3 }),
+    );
+    for (const piece of ['HEMMELIG', 'localhost', '::1']) expect(invalid).not.toContain(piece);
+  });
+
+  it('still scans in linear time', async () => {
+    const { removeLinks } = await import('../src/corpay/gateway-answers.js');
+    for (const text of [`[${':'.repeat(100_000)}`, `${'?'.repeat(100_000)}`, `${'a/'.repeat(100_000)}`, `${'[:'.repeat(100_000)}`]) {
+      const started = performance.now();
+      removeLinks(text);
+      expect(performance.now() - started).toBeLessThan(500);
+    }
+  });
+});
+
+describe('typed answers: the edges, eighth round', () => {
+  it('removes a link whole before the error is redacted, so no part of it is left after a secret', async () => {
+    const key = ['https://pay.example/invoice?to', 'ken=ABCDEFGH&ticket=PRIVATE_PATH&Sig', 'nature=SECRET_SIGNATURE'].join('');
+    const { impl } = stub({});
+    const invalid = JSON.stringify(await gateway(impl).callTool('get_vendor', { vendorId: 'V1', [key]: 1 }));
+    for (const piece of ['PRIVATE_PATH', 'SECRET_SIGNATURE', 'pay.example']) expect(invalid).not.toContain(piece);
+  });
+
+  it('removes IP addresses in other spellings, and keeps times and plain numbers', async () => {
+    const value = 'A 0177.0.0.1 B 0x7f000001 C 2001:db8::1 D [fe80::1%25eth0] E 2001:0:0:0:0:0:0:1 F kl. 12:34:56, 127.1 kr. og ref 2130706433';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({
+      notes: [{ value: 'A [link removed] B [link removed] C [link removed] D [link removed] E [link removed] F kl. 12:34:56, 127.1 kr. og ref 2130706433' }],
+    });
+  });
+
+  it('still scans in linear time, also a long run of punctuation between slashes', async () => {
+    const { removeLinks } = await import('../src/corpay/gateway-answers.js');
+    for (const text of [`/${'!'.repeat(100_000)}abcde`, `${'!'.repeat(100_000)}:`, `${'0:'.repeat(100_000)}`]) {
+      const started = performance.now();
+      removeLinks(text);
+      expect(performance.now() - started).toBeLessThan(500);
+    }
+  });
+});
+
+describe('typed answers: the edges, ninth round', () => {
+  it('removes a link whole when it holds a double quote or an angle bracket', async () => {
+    const value = ['Se https://pay.example/invoice?file=O"Reilly&Sig', 'nature=PRIVAT1 og https://pay.example/a<b&Sig', 'nature=PRIVAT2 her'].join('');
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'Se [link removed] og [link removed] her' }] });
+  });
+
+  it('removes a host under an abbreviation-like ending, and keeps only the listed abbreviations', async () => {
+    const value = 'A customer.nr B Reg.nr. og Kto.nr. C f.eks. D reg.nr/sti';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'A [link removed] B Reg.nr. og Kto.nr. C f.eks. D [link removed]' }] });
+  });
+
+  it('removes an IP address in another spelling inside a word', async () => {
+    const value = 'A ip=0177.0.0.1 B ip=0x7f000001 C 0177.0.0.1#PRIVAT D addr=2001:db8::1 E 12:34:56';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'A [link removed] B [link removed] C [link removed] D [link removed] E 12:34:56' }] });
+  });
+
+  it('removes a named account number grouped with underscores', async () => {
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value: 'Account no. 1234_567890' }] } } });
+    const text = JSON.stringify(await gateway(impl).callTool('get_expense', { expenseId: 'E1' }));
+    for (const piece of ['1234', '567890']) expect(text).not.toContain(piece);
+  });
+});
+
+describe('typed answers: the edges, tenth round', () => {
+  it('builds the text of an answer from its scrubbed data, so both say the same', async () => {
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, amount: 1240000, notes: [{ id: 'N1', value: 'Note:\nPlease approve' }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ id: 'E1', amount: 1240000, notes: [{ value: 'Note:\nPlease approve' }] });
+    expect(result.content[0]!.text).toBe(`The Corpay One expense.\n\n${JSON.stringify(result.structuredContent)}`);
+  });
+
+  it('removes an IPv4 address with a port, in any spelling, and keeps a time', async () => {
+    const value = 'A 0x7f000001:8080#PRIVAT B 127.1:8080#PRIVAT C kl. 12:34';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'A [link removed] B [link removed] C kl. 12:34' }] });
+  });
+
+  it('removes a link split by a tab or a line break, and keeps lines that only end in a colon or a dot', async () => {
+    const value = 'A https:\tfoo/x?ticket=PRIVAT B https:\n//foo/y C Bemærk:\nBetal i dag. Betalt.\nTak';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'A [link removed] B [link removed] C Bemærk:\nBetal i dag. Betalt.\nTak' }] });
+  });
+});
+
+describe('typed answers: link removal across line breaks stays linear', () => {
+  it('scans a long run of words joined by tabs and line breaks in linear time', async () => {
+    const { removeLinks } = await import('../src/corpay/gateway-answers.js');
+    for (const text of [`${'a\t'.repeat(100_000)}`, `${'a\n'.repeat(100_000)} x`, `${'0x1:'.repeat(50_000)}`]) {
+      const started = performance.now();
+      removeLinks(text);
+      expect(performance.now() - started).toBeLessThan(500);
+    }
+  });
+});
+
+describe('typed answers: the edges, eleventh round', () => {
+  it('removes a known scheme split by a line break or a tab, and IPv4 with hex parts', async () => {
+    const value = 'A webcal:\nPRIVAT_KALENDER B sms:\t12345678 C 1.2.3.0xff D 0x7f.0.0.1 E Bemærk:\nBetal F 1.240,50 kr.';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'A [link removed] B [link removed] C [link removed] D [link removed] E Bemærk:\nBetal F 1.240,50 kr.' }] });
+    expect(JSON.stringify(result)).not.toContain('PRIVAT');
+  });
+});
+
+describe('typed answers: the edges, twelfth round', () => {
+  it('removes card numbers in full-width digits or grouped with any dash', async () => {
+    const value = 'A ４１１１ １１１１ １１１１ １１１１ B 4111–1111–1111–1111 C 5555—5555—5555—4444 D 4111−1111−1111−1111';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({
+      notes: [{ value: 'A [bank or card number removed] B [bank or card number removed] C [bank or card number removed] D [bank or card number removed]' }],
+    });
+    for (const piece of ['4111', '１１１１', '5555']) expect(JSON.stringify(result)).not.toContain(piece);
+  });
+
+  it('removes a known scheme after a line break in a longer run, and hex IPv4 with a port', async () => {
+    const value = 'A Hello\nwebcal:\nPRIVAT1 B 1.2.3.0xff:8080#PRIVAT2 C 0x7f.0.0.1:8080#PRIVAT3 D Bemærk:\nBetal kl. 12:34';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'A [link removed] B [link removed] C [link removed] D Bemærk:\nBetal kl. 12:34' }] });
+    expect(JSON.stringify(result)).not.toContain('PRIVAT');
+  });
 });

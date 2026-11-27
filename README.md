@@ -259,8 +259,17 @@ await gateway.callTool('list_expenses', { state: 'Awaiting' }, { caller: 'user-1
   the bill for payment).
 - Changes run directly when the policy enables writes. There is no
   prepare/commit step in the gateway: the host decides who may change what.
-- Answers leave out bank and card numbers and signed attachment links; errors
-  are fixed texts by HTTP status, with `failure: { httpStatus, requestId }`.
+- Answers are typed: each tool passes on only the fields of its answer type
+  (`src/corpay/gateway-answers.ts`), each checked for its kind (id, code,
+  company or VAT number, text, date, number, true/false). No bank or card
+  field is in any list, and no link is passed on: attachment and website
+  fields are not listed, and a link in any text, also in an error, is
+  replaced by `[link removed]`. Text is also scrubbed of bank and card
+  numbers, as an extra guard. A change answers with what was done, from its
+  own input and typed, never Corpay One's body. See the CHANGELOG (2.0.0) for
+  the answer shapes.
+- Errors are fixed texts by HTTP status, with
+  `failure: { httpStatus, requestId }`.
 - Secrets must be printable ASCII of at least 16 characters; nothing that
   leaves an instance holds a piece of one.
 

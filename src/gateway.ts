@@ -4,6 +4,7 @@ import { fixedOutputs, withheldResult } from './fallbacks.js';
 import { SecretRedactor } from './gateway-redactor.js';
 import { admitsKey, KEY_REFUSED, leaksSecret, maskedText, sealedError } from './key-admission.js';
 import { redactDeep, redactText } from './redaction.js';
+import { removeLinks } from './corpay/gateway-answers.js';
 import { writeGatewayAuditEvent } from './corpay/gateway-audit.js';
 import { basicCredentials, CorpayGatewayClient, type CorpayEnvironment } from './corpay/gateway-client.js';
 import { failureMetadata, vendorRequestId, type FailureMetadata } from './corpay/gateway-errors.js';
@@ -28,8 +29,10 @@ export { WEBHOOK_EVENTS } from './corpay/catalog.js';
 /**
  * Embeddable entry point (package export `./gateway`): an embedding host,
  * such as an MCP gateway that does its own per-user authorization, lists
- * `tools` and invokes `callTool`. The tools, their inputs and how their
- * answers are scrubbed live in src/corpay/gateway-tools.ts.
+ * `tools` and invokes `callTool`. The tools and their inputs live in
+ * src/corpay/gateway-tools.ts, and the typed answers (an allow-list of fields
+ * per answer type) in src/corpay/gateway-answers.ts. The pattern scrub below
+ * is an extra guard on top.
  *
  * One instance per company (Corpay One team). Several instances can run in
  * one process. Each instance uses only what the host passes: the app's
@@ -328,8 +331,10 @@ function buildCorpayGateway(options: Partial<CorpayGatewayOptions>, credentials:
         },
         () =>
           runCall(toolName, input).then(result => {
-            // Every result is scrubbed, also an error that quotes the input: no bank or card number and no signed link leaves.
-            const final = withFailureInForm(redactDeep(scrub(result), redactor) as GatewayToolResult);
+            // Every result is scrubbed, also an error that quotes the input: no bank or card number and no link leaves. An
+            // answer is scrubbed as data and its text built again from it, so both say the same and JSON escapes are never
+            // read as text.
+            const final = finalResult(result, redactor);
             // The sink check, as the very last step: a result that holds a piece of a secret anywhere is withheld whole.
             return leaksSecret(final, redactor) ? withheldResult() : final;
           }),
@@ -349,7 +354,8 @@ function buildCorpayGateway(options: Partial<CorpayGatewayOptions>, credentials:
       const parsed = schema.safeParse(input ?? {});
       if (!parsed.success) {
         await writeGatewayAuditEvent({ tool: name, action: 'rejected', reason: 'invalid input' });
-        return errorResult(redactText(`Invalid input for ${tool.name}: ${z.prettifyError(parsed.error)}`, redactor));
+        // Links are removed whole before redaction, which could split one and leave its end behind.
+        return errorResult(redactText(removeLinks(`Invalid input for ${tool.name}: ${z.prettifyError(parsed.error)}`), redactor));
       }
       const values = parsed.data as Record<string, unknown>;
       const denied = policyDenial(name, tool);
@@ -367,12 +373,35 @@ function buildCorpayGateway(options: Partial<CorpayGatewayOptions>, credentials:
         throw error;
       }
       await writeGatewayAuditEvent({ tool: name, action: 'finish', target, status: 'ok' });
-      // Every answer is scrubbed here as well, whatever the tool did: no bank or card number and no signed link leaves.
-      return jsonResult(tool.summary, redactDeep(redactDeep(scrub(data), redactor), redactor));
+      // Every answer is scrubbed here as well, on top of its type, whatever the tool did: no bank or card number and no signed link leaves.
+      // A number or true/false that redaction turned into a marker is left out, so every field keeps its type.
+      return jsonResult(tool.summary, sameKinds(data, redactDeep(redactDeep(scrub(data), redactor), redactor)));
     } catch (error) {
-      return errorResult(redactText(error instanceof Error ? error.message : String(error), redactor), failureMetadata(error));
+      return errorResult(redactText(removeLinks(error instanceof Error ? error.message : String(error)), redactor), failureMetadata(error));
     }
   }
+}
+
+/**
+ * The redacted answer with every number or true/false that redaction (or the scrub) changed into something else left
+ * out, so a typed field is never turned into text. Texts stay, redacted.
+ */
+export function sameKinds(before: unknown, after: unknown, depth = 0): unknown {
+  if (depth > 64) return undefined;
+  if (Array.isArray(before) && Array.isArray(after)) {
+    return after.map((entry, i) => sameKinds(before[i], entry, depth + 1)).filter(entry => entry !== undefined);
+  }
+  if (before !== null && after !== null && typeof before === 'object' && typeof after === 'object' && !Array.isArray(before) && !Array.isArray(after)) {
+    const out: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(after as Record<string, unknown>)) {
+      const kept = sameKinds((before as Record<string, unknown>)[key], entry, depth + 1);
+      if (kept !== undefined) out[key] = kept;
+    }
+    return out;
+  }
+  if ((typeof before === 'number' || typeof before === 'boolean') && typeof after !== typeof before) return undefined;
+  if (typeof after === 'number' || typeof after === 'boolean') return typeof before === typeof after ? after : undefined;
+  return after;
 }
 
 /** Why the host's policy refuses a tool, or undefined when it may run. */
@@ -405,6 +434,17 @@ export type CorpayGateway = ReturnType<typeof createCorpayGateway>;
 function jsonResult(text: string, structuredContent: unknown): GatewayToolResult {
   const data = JSON.parse(JSON.stringify(structuredContent ?? null)) as GatewayJsonValue;
   return { content: [{ type: 'text', text: `${text}\n\n${JSON.stringify(data)}` }], structuredContent: data };
+}
+
+/** A result as it leaves: an answer's data scrubbed and redacted, its text built from that; an error's text scrubbed. */
+function finalResult(result: GatewayToolResult, redactor: SecretRedactor | undefined): GatewayToolResult {
+  if (!result.isError && result.structuredContent !== undefined) {
+    const first = result.content[0]?.text ?? '';
+    const summary = first.includes('\n\n') ? first.slice(0, first.indexOf('\n\n')) : first;
+    const data = result.structuredContent;
+    return jsonResult(summary, sameKinds(data, redactDeep(scrub(data), redactor)));
+  }
+  return withFailureInForm(redactDeep(scrub(result), redactor) as GatewayToolResult);
 }
 
 function errorResult(text: string, failure?: GatewayFailure): GatewayToolResult {
