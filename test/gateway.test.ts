@@ -706,3 +706,34 @@ describe('typed answers: the edges, sixth round', () => {
     for (const piece of ['PRIVAT', '中国', 't.co']) expect(invalid).not.toContain(piece);
   });
 });
+
+describe('typed answers: the edges, seventh round', () => {
+  it('removes paths, queries, IPv6 literals and full-width dots, and keeps short plain words with a slash', async () => {
+    const value =
+      'A example。com/invoice?ticket=HEMMELIG1 B localhost/invoice C 127.1/invoice D [::1]/invoice E intern?ticket=HEMMELIG2 F faktura/kreditnota G Byg A/S, 27/11/2026, 500 kr/md. Leverandør A/S.';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const gw = gateway(impl);
+    const result = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({
+      notes: [
+        {
+          value:
+            'A [link removed] B [link removed] C [link removed] D [link removed] E [link removed] F [link removed] G Byg A/S, 27/11/2026, 500 kr/md. Leverandør A/S.',
+        },
+      ],
+    });
+    const invalid = JSON.stringify(
+      await gw.callTool('get_vendor', { vendorId: 'V1', 'example。com/invoice?ticket=HEMMELIG1': 1, 'localhost/invoice': 2, '[::1]/x': 3 }),
+    );
+    for (const piece of ['HEMMELIG', 'localhost', '::1']) expect(invalid).not.toContain(piece);
+  });
+
+  it('still scans in linear time', async () => {
+    const { removeLinks } = await import('../src/corpay/gateway-answers.js');
+    for (const text of [`[${':'.repeat(100_000)}`, `${'?'.repeat(100_000)}`, `${'a/'.repeat(100_000)}`, `${'[:'.repeat(100_000)}`]) {
+      const started = performance.now();
+      removeLinks(text);
+      expect(performance.now() - started).toBeLessThan(500);
+    }
+  });
+});

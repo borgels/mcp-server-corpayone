@@ -22,8 +22,12 @@ its tools are unchanged.
   length with something after its colon (`https:`, `mailto:x`, `sms:1234`,
   `webcal:x`), a host name in any script (`t.co`, `example.com`,
   `customer.finance`, `faktura.pdf`, `xn--…`; a host name with a path
-  whatever it ends in) or an IPv4 address. Common abbreviations such as
-  `Reg.nr.`, `f.eks.` and `e.g.` stay. This holds for error answers too, and
+  whatever it ends in), an IPv4 address, an IPv6 literal, a query
+  (`?a=b`) or a path (`localhost/x`, `127.1/x`; also `faktura/kreditnota`,
+  where a part between slashes is longer than four letters). Full-width and
+  ideographic dots count as dots. Common abbreviations such as `Reg.nr.`,
+  `f.eks.` and `e.g.`, and short words with a slash such as `A/S`, `kr/md`
+  and `27/11/2026`, stay. This holds for error answers too, and
   replaces the `[signed link removed]` marker of 1.3. The scan is linear in
   the length of the text.
 - Texts are never cut, so nothing that is to be removed is ever cut in two

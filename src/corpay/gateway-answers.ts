@@ -34,6 +34,12 @@ export const LINK_REMOVED = '[link removed]';
 const WORD = /[^\s"<>]+/g;
 /** A scheme (a name that starts with a letter) and a colon with something right after it: https:, mailto:x, sms:1234. */
 const SCHEME = /(?:^|[^A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*:[^:]/;
+/** A query in a word: a question mark and, before the next one, an equals sign. */
+const QUERY = /\?[^?]*=/;
+/** An IPv6 literal in a word: hex digits and colons in square brackets. */
+const IPV6 = /\[[0-9A-Fa-f.]*:[0-9A-Fa-f:.]*\]/;
+/** A part of a word between slashes that is no path: four letters or digits at most, with punctuation around them. */
+const SHORT_PART = /^[^\p{L}\p{N}]*[\p{L}\p{N}]{0,4}[^\p{L}\p{N}:?]*$/u;
 /** A run of letters, digits, dots and dashes in a word (any script): where a host name may stand. */
 const HOST_RUN = /[\p{L}\p{N}\p{M}.-]+/gu;
 /** The last label of a host name: two letters or more (any script), or an internationalised one ("xn--…"). */
@@ -43,12 +49,20 @@ const TOP_LABEL = /^(?:\p{L}[\p{L}\p{M}]+|xn--[a-z0-9-]+)$/iu;
  * Whether a word of a text is, or holds, a link: it holds "//" or "www.", a scheme of any length with something after
  * its colon ("Note: text" and "14:30" are no links), or a host name in any script (labels with dots between, the last of
  * two letters or more or "xn--…": "t.co", "example.com", "customer.finance", "faktura.pdf"; not "bl.a", "1.240" or a
- * common abbreviation such as "f.eks" or "Reg.nr") or an IPv4 address. A word that only looks like one is removed too: removing too much is the price of never letting a
+ * common abbreviation such as "f.eks" or "Reg.nr") or an IPv4 address, a query ("?a=b"), an IPv6 literal, or a path
+ * (a "/" between parts of which one is longer than four letters or digits or holds a dot or a colon: "localhost/x",
+ * "127.1/x", "faktura/kreditnota"; not "A/S", "kr/md" or "27/11/2026"). Full-width and ideographic dots count as dots. A word that only looks like one is removed too: removing too much is the price of never letting a
  * link through. Linear in the length of the word.
  */
-function isLink(word: string): boolean {
+function isLink(original: string): boolean {
+  // Read as a browser would: full-width and ideographic dots are dots, compatibility forms their plain ones.
+  const word = original.normalize('NFKC').replace(/[\u3002\uff0e\uff61]/g, '.');
   if (word.includes('//') || word.toLowerCase().includes('www.')) return true;
   if (SCHEME.test(word)) return true;
+  // A query ("?name=value"), or an IPv6 literal ("[::1]").
+  if (QUERY.test(word) || IPV6.test(word)) return true;
+  // A path: a word with "/" is a link unless every part is short and plain ("A/S", "kr/md", "27/11/2026").
+  if (word.includes('/') && !word.split('/').every(part => SHORT_PART.test(part))) return true;
   for (const run of word.matchAll(HOST_RUN)) {
     // A path, a query or a fragment right after it makes it a host name, whatever it ends in.
     const next = word[(run.index ?? 0) + run[0].length];
