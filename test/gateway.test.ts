@@ -691,3 +691,18 @@ describe('typed answers: the edges, fifth round', () => {
     }
   });
 });
+
+describe('typed answers: the edges, sixth round', () => {
+  it('removes short, internationalised and long-scheme links, also in an error', async () => {
+    const long = `${'a'.repeat(40)}:private-calendar?ticket=PRIVAT1`;
+    const value = `A t.co B x.com C example.mm D xn--e1afmkfd.xn--p1ai/private?ticket=PRIVAT2 E 中国.公司/private?ticket=PRIVAT3 F ${long} G e.g. f.eks. bl.a. Reg.nr. og 1.240,00 kr.`;
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const gw = gateway(impl);
+    const result = await gw.callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({
+      notes: [{ value: 'A [link removed] B [link removed] C [link removed] D [link removed] E [link removed] F [link removed] G e.g. f.eks. bl.a. Reg.nr. og 1.240,00 kr.' }],
+    });
+    const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', '中国.公司/private?ticket=PRIVAT3': 1, [long]: 2, 't.co': 3 }));
+    for (const piece of ['PRIVAT', '中国', 't.co']) expect(invalid).not.toContain(piece);
+  });
+});

@@ -18,11 +18,12 @@ its tools are unchanged.
   name. A number of a trillion or more is left out, never turned into text.
 - Links are never passed on: attachment URLs, websites and logos are not
   listed, and every word of a text that is or holds a link is replaced by
-  `[link removed]`, whole: a word with `//` or `www.`, a scheme with
-  something after its colon (`https:`, `mailto:x`, `sms:1234`, `webcal:x`),
-  a host name (`example.com`, `customer.finance`, `faktura.pdf`; a host name
-  with a path whatever it ends in) or an IPv4 address. Common abbreviations
-  such as `Reg.nr.` and `f.eks.` stay. This holds for error answers too, and
+  `[link removed]`, whole: a word with `//` or `www.`, a scheme of any
+  length with something after its colon (`https:`, `mailto:x`, `sms:1234`,
+  `webcal:x`), a host name in any script (`t.co`, `example.com`,
+  `customer.finance`, `faktura.pdf`, `xn--…`; a host name with a path
+  whatever it ends in) or an IPv4 address. Common abbreviations such as
+  `Reg.nr.`, `f.eks.` and `e.g.` stay. This holds for error answers too, and
   replaces the `[signed link removed]` marker of 1.3. The scan is linear in
   the length of the text.
 - Texts are never cut, so nothing that is to be removed is ever cut in two

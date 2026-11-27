@@ -33,15 +33,17 @@ export const LINK_REMOVED = '[link removed]';
 /** A word of a text: everything up to a space, a double quote or an angle bracket. A link is removed as a whole word. */
 const WORD = /[^\s"<>]+/g;
 /** A scheme (a name that starts with a letter) and a colon with something right after it: https:, mailto:x, sms:1234. */
-const SCHEME = /(?:^|[^A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,30}:[^:]/;
-/** A run of ASCII letters, digits, dots and dashes in a word: where a host name may stand. */
-const HOST_RUN = /[A-Za-z0-9.-]+/g;
+const SCHEME = /(?:^|[^A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*:[^:]/;
+/** A run of letters, digits, dots and dashes in a word (any script): where a host name may stand. */
+const HOST_RUN = /[\p{L}\p{N}\p{M}.-]+/gu;
+/** The last label of a host name: two letters or more (any script), or an internationalised one ("xn--…"). */
+const TOP_LABEL = /^(?:\p{L}[\p{L}\p{M}]+|xn--[a-z0-9-]+)$/iu;
 
 /**
- * Whether a word of a text is, or holds, a link: it holds "//" or "www.", a scheme with something after its colon
- * ("Note: text" and "14:30" are no links), or a host name (labels with dots between, the first of two characters or
- * more and the last of two letters or more: "example.com", "customer.finance", "faktura.pdf"; not "f.eks" or "1.240")
- * or an IPv4 address. A word that only looks like one is removed too: removing too much is the price of never letting a
+ * Whether a word of a text is, or holds, a link: it holds "//" or "www.", a scheme of any length with something after
+ * its colon ("Note: text" and "14:30" are no links), or a host name in any script (labels with dots between, the last of
+ * two letters or more or "xn--…": "t.co", "example.com", "customer.finance", "faktura.pdf"; not "bl.a", "1.240" or a
+ * common abbreviation such as "f.eks" or "Reg.nr") or an IPv4 address. A word that only looks like one is removed too: removing too much is the price of never letting a
  * link through. Linear in the length of the word.
  */
 function isLink(word: string): boolean {
@@ -55,7 +57,7 @@ function isLink(word: string): boolean {
   return false;
 }
 
-/** Whether a run of ASCII letters, digits, dots and dashes is a host name or an IPv4 address, ends' dots and dashes aside. */
+/** Whether a run of letters, digits, dots and dashes is a host name or an IPv4 address, ends' dots and dashes aside. */
 function isHost(run: string, withPath: boolean): boolean {
   let from = 0;
   let to = run.length;
@@ -67,12 +69,15 @@ function isHost(run: string, withPath: boolean): boolean {
     return labels.length === 4 && labels.every(label => Number(label) <= 255 && !(label.length > 1 && label.startsWith('0')));
   }
   const last = labels[labels.length - 1]!;
-  if (!/^[A-Za-z]{2,}$/.test(last)) return false;
-  return withPath || (labels[0]!.length >= 2 && !ABBREVIATION_END.has(last.toLowerCase()));
+  if (!TOP_LABEL.test(last)) return false;
+  return withPath || !ABBREVIATION_END.has(last.toLowerCase());
 }
 
-/** Endings of common Danish and English abbreviations written with a dot ("Reg.nr.", "Kunde.nr"): no host names, unless a path follows. */
-const ABBREVIATION_END = new Set(['nr', 'nrs', 'eks', 'ex', 'inkl', 'excl', 'ekskl', 'evt', 'vedr', 'dvs', 'osv', 'att', 'tlf', 'ref', 'pga', 'iflg', 'ifm', 'mht', 'mv', 'mm', 'etc']);
+/**
+ * Endings of common Danish and English abbreviations written with a dot ("Reg.nr.", "f.eks."), none of them a
+ * top-level domain: no host names, unless a path follows.
+ */
+const ABBREVIATION_END = new Set(['nr', 'nrs', 'eks', 'inkl', 'ekskl', 'excl', 'evt', 'vedr', 'dvs', 'osv', 'tlf', 'pga', 'iflg', 'ifm', 'mht', 'etc']);
 
 /** A text with every word that is or holds a link replaced by LINK_REMOVED. */
 export function removeLinks(text: string): string {
