@@ -22,8 +22,17 @@ review:
 - Below an account, bank, card, payee or beneficiary object, no number is
   passed on at any depth; `cvv2`, `cvc2` and dotted names such as
   `account.number` are left out.
-- A 12-digit card number is found; HTML character references, percent-encoded
-  and relative links are looked through; Imgix's `s` signature is known.
+- A 12-digit card number is found, also inside a longer run of digits; HTML
+  character references, percent-encoded (also twice) and relative links,
+  including a bare file name with a query, are looked through; Imgix's `s`
+  signature is known. `Expires` alone does not make a link signed.
+- More field names are left out: plurals (`bankAccountNumbers`), routing,
+  transit and clearing codes, `bsb` and `aba`. An id under a bank, card or
+  account name, or one of digits only, is scrubbed as any text.
+- Labelled account numbers with "is" and slashes ("Account number is …",
+  "Account No: 12/34/567890") are found, in bounded patterns.
+- A successful result's text is made from its scrubbed data, so both say the
+  same, ids included.
 
 ## 1.3.0
 

@@ -329,7 +329,7 @@ function buildCorpayGateway(options: Partial<CorpayGatewayOptions>, credentials:
         () =>
           runCall(toolName, input).then(result => {
             // Every result is scrubbed, also an error that quotes the input: no bank or card number and no signed link leaves.
-            const final = withFailureInForm(redactDeep(scrub(result), redactor) as GatewayToolResult);
+            const final = withFailureInForm(redactDeep(scrubbedResult(result), redactor) as GatewayToolResult);
             // The sink check, as the very last step: a result that holds a piece of a secret anywhere is withheld whole.
             return leaksSecret(final, redactor) ? withheldResult() : final;
           }),
@@ -402,6 +402,17 @@ const UNKNOWN_TOOL = 'unknown_tool';
 export type CorpayGateway = ReturnType<typeof createCorpayGateway>;
 
 /** The summary, then the same (already redacted) data as compact JSON in the text block. */
+/**
+ * A result scrubbed (src/corpay/gateway-tools.ts, scrub). A successful one with data has its text made again from the
+ * scrubbed data, so the text and the data say the same, ids included; an error's text is scrubbed as text.
+ */
+function scrubbedResult(result: GatewayToolResult): GatewayToolResult {
+  if (result.isError || result.structuredContent === undefined) return scrub(result) as GatewayToolResult;
+  const first = result.content[0];
+  const summary = first?.type === 'text' ? first.text.split('\n\n')[0]! : '';
+  return jsonResult(scrub(summary) as string, scrub(result.structuredContent));
+}
+
 function jsonResult(text: string, structuredContent: unknown): GatewayToolResult {
   const data = JSON.parse(JSON.stringify(structuredContent ?? null)) as GatewayJsonValue;
   return { content: [{ type: 'text', text: `${text}\n\n${JSON.stringify(data)}` }], structuredContent: data };

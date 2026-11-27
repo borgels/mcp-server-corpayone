@@ -293,6 +293,20 @@ describe('calls', () => {
           bankruptcyStatus: 'none',
           accounting: { number: 4000 },
           report: 'https://example.test/report?code=DKK',
+          signedUuid: 'File https://files.example/9ff6e103-1fb4-41ed-be17-8ae66ab1877b.pdf?sig=abcdef',
+          entityScheme: '<a href="https&#58;&#47;&#47;files.example/a?sig=abcdef">file</a>',
+          doubleEncoded: 'https%253A%252F%252Ffiles.example%252Fa%253Fsig%253Dabcdef',
+          bare: 'invoice.pdf?sig=abcdef',
+          bankAccountNumbers: ['12345678'],
+          routingCode: '123456789',
+          bsb: '123456',
+          aba: '021000021',
+          bankAccountId: 'DK5000400440116243',
+          cardId: '4111111111111111',
+          trailing: 'card 501800000009 0',
+          labels: 'Account number is 12345678 og Pay to Account No: 12/34/567890',
+          slashes: '/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a/a',
+          plain: 'https://public.example/report?Expires=never',
           url: "https://files.example/bob's.pdf?Expires=2000000000&Signature=abc",
           gb29nwbk60161331926819: 3, card: 4111111111111111, big: 6221234567890598594, small: 42, '4111111111111111': 1, 'https://x.example/a?Signature=abc': 2 },
       },
@@ -307,7 +321,10 @@ describe('calls', () => {
     for (const piece of ['0440', '4111', '%73ig', 'NWBK', '5555', '9876', '3456789012', 'sig=abcdef', '1331926819', '1234567890', '622123', '22334455', '66778899', '55443322', '12345678', 'Signature', 'hmac', 'Key-Pair']) {
       expect(company).not.toContain(piece);
     }
-    for (const piece of ['87654321', '33445566', '501800000009', 'sig&#61;abc', 'sig%3Dabc', 'sig=abc', 's=e277f90a', '"cvv2"', '"cvc2"']) expect(company).not.toContain(piece);
+    for (const piece of ['87654321', '33445566', '501800000009', 'sig&#61;abc', 'sig%3Dabc', 'sig=abc', 's=e277f90a', '"cvv2"', '"cvc2"', 'sig%253D', '123456789', '021000021', 'DK5000400440116243', '567890']) {
+      expect(company).not.toContain(piece);
+    }
+    expect(company).toContain('https://public.example/report?Expires=never');
     // Ids, ordinary fields and ordinary links are kept as they are.
     expect(company).toContain('"uuid":"9ff6e103-1fb4-41ed-be17-8ae66ab1877b"');
     expect(company).toContain('"vendorId":"9ff6e103-1fb4-41ed-be17-8ae66ab1877b"');
@@ -320,6 +337,12 @@ describe('calls', () => {
     // An error that quotes the input is scrubbed too.
     const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'https://x.example/a?Signature=abc': 1 }));
     expect(invalid).not.toContain('Signature');
+  });
+
+  it('keeps the text and the data of an answer the same, ids included', async () => {
+    const { impl } = stub({ 'GET /external/v1/teams/team-own': { data: { id: 'b7c1e2f0-1a2b-4c3d-9e8f-0a1b2c3d4e5f', name: 'A' } } });
+    const result = await gateway(impl).callTool('get_company', {});
+    expect(result.content[0]!.text).toContain(JSON.stringify(result.structuredContent));
   });
 
   it('gives an HTTP error as our own text with failure metadata, never the body', async () => {
