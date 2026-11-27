@@ -95,7 +95,7 @@ const IBAN_START = /[A-Z]{2}\d{2}/gi;
 const IBAN_REST = /^(?:[\s\u00a0]*[A-Z0-9]){11,30}/i;
 /** A domestic account or sort code named as one in the text: "Reg.nr. 1234", "Konto 1234567890", "Account no. 12-34-56". */
 const LABELLED_ACCOUNT =
-  /\b(reg(?:istrerings)?\.?\s*nr\.?|registreringsnummer|konto(?:nr\.?|nummer)?|account(?:\s*(?:no\.?|number|nr\.?))?|acct\.?(?:\s*no\.?)?|sort\s*code|routing(?:\s*(?:no\.?|number))?|bsb|aba)(\s*[:#.]?\s*)\d[\d\s\u00a0-]{2,}\d/gi;
+  /\b(reg(?:istrerings)?\.?\s*nr\.?|registreringsnummer|konto(?:nr\.?|nummer)?|account(?:\s*(?:no\.?|number|nr\.?))?|acct\.?(?:\s*no\.?)?|sort\s*code|routing(?:\s*(?:no\.?|number))?|bsb|aba)([\s\u00a0:#.=-]*)\d[\d\s\u00a0-]{2,}\d/gi;
 /** A run of 13 or more digits, in groups or not and whatever stands next to it: it holds a card number when part of it passes the Luhn check. */
 const CARD = /\d(?:[\s\u00a0-]*\d){12,}/g;
 export const NUMBER_REMOVED = '[bank or card number removed]';
@@ -157,22 +157,28 @@ function ibanLength(candidate: string): number {
  * a candidate that failed, so a failed one never hides a real one.
  */
 function withoutIbans(value: string): string {
-  let out = '';
-  let from = 0;
+  // Every place a country code and check digits stand is tried on the original text, and every IBAN found is marked;
+  // overlapping marks are merged, so no match hides another.
+  const marks: Array<[number, number]> = [];
   IBAN_START.lastIndex = 0;
   for (let found = IBAN_START.exec(value); found !== null; found = IBAN_START.exec(value)) {
     const start = found.index;
     IBAN_START.lastIndex = start + 1;
-    if (start < from) continue;
     const rest = IBAN_REST.exec(value.slice(start + 4));
     const length = rest ? ibanLength(value.slice(start, start + 4 + rest[0].length)) : 0;
     if (length === 0) continue;
     // The end in the text: after the IBAN's last letter or digit, spaces between its groups counted.
     let end = start;
     for (let seen = 0; seen < length; end += 1) if (!/[\s\u00a0]/.test(value[end]!)) seen += 1;
+    const last = marks[marks.length - 1];
+    if (last && start <= last[1]) last[1] = Math.max(last[1], end);
+    else marks.push([start, end]);
+  }
+  let out = '';
+  let from = 0;
+  for (const [start, end] of marks) {
     out += value.slice(from, start) + NUMBER_REMOVED;
     from = end;
-    IBAN_START.lastIndex = from;
   }
   return out + value.slice(from);
 }
@@ -205,7 +211,11 @@ export function scrub(value: unknown, depth = 0): unknown {
   if (typeof value === 'string') return scrubText(value);
   if (Array.isArray(value)) return value.map(entry => scrub(entry, depth + 1)).filter(entry => entry !== undefined);
   // A card number may also come as a number.
-  if (typeof value === 'number') return Number.isFinite(value) && Math.abs(value) >= 1e12 && holdsCardNumber(Math.abs(value).toFixed(0)) ? NUMBER_REMOVED : value;
+  // Above the safe integers the digits are no longer the ones that were sent, so such a number is removed as it is.
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || Math.abs(value) < 1e12) return value;
+    return Math.abs(value) > Number.MAX_SAFE_INTEGER || holdsCardNumber(Math.abs(value).toFixed(0)) ? NUMBER_REMOVED : value;
+  }
   if (value === null || typeof value !== 'object') return value;
   const out: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(value)) {
