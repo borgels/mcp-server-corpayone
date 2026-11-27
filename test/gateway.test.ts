@@ -153,6 +153,15 @@ describe('calls', () => {
     expect(calls.some(call => call.url.includes('/external/'))).toBe(false);
   });
 
+  it('keeps a renewed refresh token even when the access token in the same answer is unusable', async () => {
+    const kept: string[] = [];
+    const { impl, calls } = stub({ 'GET /external/v1/teams': { data: { teams: [] } } }, () => json({ access_token: 'short', refresh_token: NEW_REFRESH }));
+    const result = await gateway(impl, { onRefreshToken: token => void kept.push(token) }).callTool('check_connection', {});
+    expect(result.isError).toBe(true);
+    expect(kept).toEqual([NEW_REFRESH]);
+    expect(calls.some(call => call.url.includes('/external/'))).toBe(false);
+  });
+
   it('says that the access was refused when the token is no longer accepted', async () => {
     const { impl } = stub({}, () => json({ error: 'invalid_grant', secret: REFRESH }, 400));
     const result = await gateway(impl).callTool('list_expenses', {});
@@ -248,7 +257,7 @@ describe('calls', () => {
     const { impl } = stub({
       'GET /external/v1/teams': { data: { teams: [{ id: TEAM, name }] } },
       'GET /external/v1/teams/team-own': {
-        data: { name: 'A PAN4111111111111111 og 4111111111111111USD', card: 4111111111111111, small: 42, '4111111111111111': 1, 'https://x.example/a?Signature=abc': 2 },
+        data: { name: 'A PAN4111111111111111 og 4111111111111111USD og gb29nwbk60161331926819', gb29nwbk60161331926819: 3, card: 4111111111111111, small: 42, '4111111111111111': 1, 'https://x.example/a?Signature=abc': 2 },
       },
     });
     const gw = gateway(impl);
@@ -257,6 +266,7 @@ describe('calls', () => {
     const company = JSON.stringify(await gw.callTool('get_company', {}));
     expect(company).not.toContain('4111111111111111');
     expect(company).not.toContain('Signature');
+    expect(company).not.toContain('gb29nwbk');
     expect(company).toContain('"small":42');
     // An error that quotes the input is scrubbed too.
     const invalid = JSON.stringify(await gw.callTool('get_vendor', { vendorId: 'V1', 'https://x.example/a?Signature=abc': 1 }));

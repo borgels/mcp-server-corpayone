@@ -208,11 +208,6 @@ export class CorpayGatewayClient {
       throw new CorpayGatewayHttpError(response.status, 'POST', wholeNumber(response.headers.get('retry-after')), requestIdFrom(response.headers));
     }
     const answer = (await this.readJson(response, 'POST')) as { access_token?: unknown; expires_in?: unknown; refresh_token?: unknown } | null;
-    const token = answer?.access_token;
-    if (typeof token !== 'string' || !/^[\x21-\x7e]{16,8192}$/.test(token)) {
-      throw new Error("Corpay One's identity service answered without a usable access token; nothing of it is passed on.");
-    }
-    this.admitIssued(token);
     const next = answer?.refresh_token;
     if (next !== undefined && next !== null && next !== this.refreshToken) {
       // A new token may already have retired the old one: if it cannot be kept as it came, nothing more is sent.
@@ -236,6 +231,12 @@ export class CorpayGatewayClient {
         throw new Error(NOT_KEPT);
       }
     }
+    // The access token is looked at only after a new refresh token has been kept: a bad access token never loses it.
+    const token = answer?.access_token;
+    if (typeof token !== 'string' || !/^[\x21-\x7e]{16,8192}$/.test(token)) {
+      throw new Error("Corpay One's identity service answered without a usable access token; nothing of it is passed on.");
+    }
+    this.admitIssued(token);
     const seconds = typeof answer?.expires_in === 'number' && answer.expires_in > 0 ? Math.min(answer.expires_in, 86_400) : 3600;
     this.access = { token, expiresAt: Date.now() + seconds * 1000 };
     return token;
