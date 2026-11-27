@@ -100,7 +100,7 @@ const shortText = (max: number) => z.string().trim().min(1).max(max);
 
 /** Field names (lower case, without separators) that speak of bank or card data: such a field is left out. */
 const HIDDEN_NAME =
-  /(iban|bban|^bics?$|swiftbic|swift|routing(no|nr|number|code)?s?$|^routing|sortcode|clearing(no|nr|number|code)?$|^transit(no|nr|number|code)?$|bsb$|^aba$|^cid$|cvv|cvc|cvn|csc|securitycode|verificationvalue|verificationcode|expiry|expiration|expdate|cardnumber|cardnos?$|carddetail|carddata|cardinfo|creditcard|debitcard|^cards?$|^pans?$|bankaccount|bankdetail|bankinfo|bankdata|banknumber|banknos?$|banknrs?$|bankcode|bankreg|^bank$|^banks$|accountnumber|accountnos?$|accountnrs?$|^accounts?$|^acct|kontonummer|kontonr|^konto$|registrationnumber|registreringsnummer|^reg(no|nr|number)s?$|paymentinstruction|paymentmethod|paymentdetail)/;
+  /(iban|bban|^bics?(code)?s?$|swiftbic|swift|routing(no|nr|number|code)?s?$|^routing|sortcode|clearing(no|nr|number|code)?s?$|^transit(no|nr|number|code)?$|bsb$|^aba$|^cid$|cvv|cvc|cvn|csc|securitycode|verificationvalue|verificationcode|expiry|expiration|expdate|cardnumber|cardnos?$|carddetail|carddata|cardinfo|creditcard|debitcard|^cards?$|^pans?$|bankaccount|bankdetail|bankinfo|bankdata|banknumber|banknos?$|banknrs?$|bankcode|bankreg|^bank$|^banks$|accountnumber|accountnos?$|accountnrs?$|^accounts?$|^acct|kontonummer|kontonr|^konto$|registrationnumber|registreringsnummer|^reg(no|nr|number)s?$|paymentinstruction|paymentmethod|paymentdetail)/;
 /** The words of a name that speak of money held somewhere: an account, a bank, a card, a payee, a beneficiary. */
 const MONEY_WORDS: ReadonlySet<string> = new Set([
   'bank', 'banks', 'card', 'cards', 'account', 'accounts', 'acct', 'konto', 'konti', 'payee', 'payees', 'beneficiary', 'beneficiaries',
@@ -171,16 +171,16 @@ const IBAN_REST = new RegExp(`^(?:${SEP}*[A-Z0-9]){11,30}`, 'i');
 const CARD = new RegExp(`\\d(?:${SEP}*\\d){11,}`, 'g');
 /** A number named as an account or a sort code: "Reg.nr. 1234", "Konto 1234567890", "Account number is 12-34-56". */
 const LABELLED_ACCOUNT = new RegExp(
-  `\\b(reg(?:istrerings)?\\.?\\s*(?:nr|no)\\.?|registreringsnummer|konto(?:\\s*(?:nr\\.?|nummer|no\\.?))?|account(?:\\s*(?:no\\.?|number|nr\\.?|#))?|a\\/c(?:\\s*no\\.?)?|acct\\.?(?:\\s*no\\.?)?|sort\\s*code|routing(?:\\s*(?:no\\.?|number|code))?|bsb|aba)((?:\\s*\\([A-Z]{3}\\))?[\\s\\u00a0:#.=/|\\-\\u2010-\\u2015\\u2212"'\\u2018\\u2019\\u201c\\u201d\\u00ab\\u00bb]*(?:(?:is|er|was|var)[\\s\\u00a0:"'\\u2018\\u2019\\u201c\\u201d\\u00ab\\u00bb]+)?)\\d(?:${SEP}*\\d){3,}`,
+  `\\b(reg(?:istrerings)?\\.?\\s*(?:nr|no)\\.?|registreringsnummer|konto(?:\\s*(?:nr\\.?|nummer|no\\.?))?|account(?:\\s*(?:no\\.?|number|nr\\.?|#))?|a\\/c(?:\\s*no\\.?)?|acct\\.?(?:\\s*no\\.?)?|sort\\s*code|routing(?:\\s*(?:no\\.?|number|code))?|bsb|aba)((?:\\s*\\([A-Z]{3}\\))?[\\s\\u00a0:#.=/|()\\[\\-\\u2010-\\u2015\\u2212"'\\u2018\\u2019\\u201c\\u201d\\u00ab\\u00bb]*(?:(?:is|er|was|var)[\\s\\u00a0:"'\\u2018\\u2019\\u201c\\u201d\\u00ab\\u00bb]+)?)\\d(?:${SEP}*\\d){3,}`,
   'gi',
 );
 
 /** A card's security code named in text: "CVV: 123", "CVC2 456", "security code 1234". */
-const SECURITY_CODE = /\b((?:cvv2?|cvc2?|cvn|csc|cid)(?:\s*(?:code|kode|number|nr|no)\.?)?|security\s*code|sikkerhedskode|kontrolcifre)([\s\u00a0:#.=/|\-\u2010-\u2015"'\u2018\u2019\u201c\u201d\u00ab\u00bb]*(?:(?:is|er)[\s\u00a0:"'\u2018\u2019\u201c\u201d\u00ab\u00bb]+)?)\d(?:[\s\u00a0.\-\u2010-\u2015]?\d){2,3}(?!\d)/gi;
+const SECURITY_CODE = /\b((?:cvv2?|cvc2?|cvn|csc|cid)(?:\s*(?:code|kode|number|nr|no)\.?)?|security\s*code|sikkerhedskode|kontrolcifre)([\s\u00a0:#.=/|()\[\-\u2010-\u2015"'\u2018\u2019\u201c\u201d\u00ab\u00bb]*(?:(?:is|er)[\s\u00a0:"'\u2018\u2019\u201c\u201d\u00ab\u00bb]+)?)\d(?:[\s\u00a0.\-\u2010-\u2015]{0,3}\d){2,3}(?!\d)/gi;
 /** A card number named in text: "PAN: 4111 …", "Card number 4111-…": any 12 or more digits after it. */
 const LABELLED_CARD = new RegExp(`\\b(pan|card(?:\\s*(?:no\\.?|number|nr\\.?))?|kort(?:nummer|nr\\.?)?)([\\s\\u00a0:#.=/|\\-"'\\u2018\\u2019\\u201c\\u201d]*)\\d(?:${SEP}*\\d){11,}`, 'gi');
 /** A card's expiry named in text: "Expiry: 12/28", "exp. 12-2028", "udløb 12/28". */
-const EXPIRY = /\b((?:expiry|expiration|exp\.?)(?:\s*(?:date|dato))?|udløb(?:sdato)?|gyldig til)([\s\u00a0:#.=/|\-\u2010-\u2015"'\u2018\u2019\u201c\u201d\u00ab\u00bb]*(?:(?:is|er)[\s\u00a0:"'\u2018\u2019\u201c\u201d\u00ab\u00bb]+)?)(?:\d{1,2}\s*[/.\-\u2010-\u2015]\s*\d{2,4}|\d{4}\s*[/.\-\u2010-\u2015]\s*\d{1,2})(?!\d)/gi;
+const EXPIRY = /\b((?:expiry|expiration|exp\.?)(?:\s*(?:date|dato))?|udløb(?:sdato)?|gyldig til)([\s\u00a0:#.=/|()\[\-\u2010-\u2015"'\u2018\u2019\u201c\u201d\u00ab\u00bb]*(?:(?:is|er)[\s\u00a0:"'\u2018\u2019\u201c\u201d\u00ab\u00bb]+)?)(?:\d{1,2}\s*[/.\-\u2010-\u2015]\s*\d{2,4}|\d{4}\s*[/.\-\u2010-\u2015]\s*\d{1,2})(?!\d)/gi;
 
 /** Whether a run of digits passes the Luhn check, as every card number does. */
 function luhn(digits: string): boolean {
@@ -311,7 +311,21 @@ function isLink(word: string): boolean {
     const read = text.replace(/\\/g, '/');
     if (/:\/\/|\/\/[a-z0-9-]|(?:^|[^a-z0-9])www\.|(?:^|[^a-z0-9])(?:https?|ftp):(?:\S|$)|^\.{0,2}\/[^\s/]+\/\S/i.test(read)) return true;
     // A relative reference with a long last segment ("/KEY…", "private/KEY…"): a path that may carry a key.
-    if (read.includes('/') && /^\.{0,2}\/?(?:[\w.~-]+\/)?[\w~-]*[A-Za-z][\w~-]{5,}$/.test(read)) return true;
+    // A relative reference may carry a key: one that starts at a root ("/KEY", "./files/KEY"), ends in a file name with an
+    // extension ("private/KEY.pdf"), or has a segment of twelve or more characters, or of six or more with letters and
+    // digits mixed. Ordinary words with a slash ("and/or", "12/28", "Travel/Transport") are not taken for one.
+    const bare = read.replace(/^[^\w./~-]+|[^\w./~-]+$/g, '');
+    if (bare.includes('/') && /^[\w./~%-]+$/.test(bare) && /[A-Za-z]/.test(bare)) {
+      const parts = bare.split('/');
+      const last = parts[parts.length - 1] ?? '';
+      if (
+        /^\.{0,2}\//.test(bare) ||
+        /\.[A-Za-z0-9]{2,5}$/.test(last) ||
+        parts.some(part => part.length >= 12 || (part.length >= 6 && /[A-Za-z]/.test(part) && /\d/.test(part)))
+      ) {
+        return true;
+      }
+    }
     const decoded = percentDecoded(htmlDecoded(text));
     if (decoded === text) return false;
     text = decoded;
@@ -324,7 +338,10 @@ function isLink(word: string): boolean {
  * query, or in its path, as Cloudinary's signed links do), so every link is removed, signed or not; and a browser drops
  * tabs and line breaks inside a link, so the text is looked at with them dropped too.
  */
-function withoutQueries(value: string): string {
+function withoutQueries(text: string): string {
+  // A browser drops tabs and line breaks inside a link ("ht\ttps:…"): when doing so shows a link, the text is read so.
+  const joined = text.replace(/[\t\r\n]+/g, '');
+  const value = joined !== text && joined.split(/[\s"<>]+/).some(word => word.length > 1 && (isLink(word) || holdsQuery(word))) ? joined : text;
   const parts = value.split(/([\s"<>]+)/);
   let removing = false;
   for (let i = 0; i < parts.length; i += 1) {
@@ -348,8 +365,17 @@ function scrubText(original: string, depth = 0, inMoney = false, jsonBudget = 8)
   // and written out again. Its own budget: a text inside JSON inside a text is parsed too, up to eight levels.
   // Larger than any real text in an answer: removed rather than looked through.
   if (original.length > 1_000_000) return TEXT_REMOVED;
-  // Links and queries go first, whole, before anything else splits the text.
-  const unlinked = withoutQueries(original);
+  // Links and queries go first, whole, before anything else splits the text. Then HTML references and percent-encoding
+  // are written out (also nested), HTML comments and tags are taken away, and links are looked for again: so neither
+  // JSON, a link nor a number hides behind them or is split by them.
+  const untagged = (text: string) => withoutComments(text).replace(/<\/?[a-z][^<>]{0,500}>/gi, '');
+  let unlinked = withoutQueries(untagged(original));
+  for (let round = 0; round < 8; round += 1) {
+    const decoded = percentDecoded(htmlDecoded(unlinked));
+    if (decoded === unlinked) break;
+    unlinked = decoded;
+  }
+  unlinked = withoutQueries(untagged(unlinked));
   if (jsonBudget > 0) {
     const spans = jsonSpans(unlinked);
     if (spans.length > 0) {
@@ -371,16 +397,7 @@ function scrubText(original: string, depth = 0, inMoney = false, jsonBudget = 8)
   }
   // JSON that could not be read here (unmatched brackets, or past the budget) is not looked through: the text goes.
   if (/\{\s*"[^"\n]{0,200}"\s*:/.test(unlinked)) return TEXT_REMOVED;
-  // Then HTML references and percent-encoding are written out (also nested) and HTML tags taken away, so no number
-  // hides behind them or is split by them.
-  let value = unlinked;
-  for (let round = 0; round < 8; round += 1) {
-    const decoded = percentDecoded(htmlDecoded(value));
-    if (decoded === value) break;
-    value = decoded;
-  }
-  value = withoutQueries(withoutComments(value).replace(/<\/?[a-z][^<>]{0,500}>/gi, ''));
-  return withoutIbans(value)
+  return withoutIbans(unlinked)
     .replace(LABELLED_ACCOUNT, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(LABELLED_CARD, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(SECURITY_CODE, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
@@ -389,6 +406,10 @@ function scrubText(original: string, depth = 0, inMoney = false, jsonBudget = 8)
 }
 
 export const TEXT_REMOVED = '[text removed]';
+/** Names of amounts: kept as numbers wherever they stand. */
+const AMOUNT_KEY = /^(amount|amounts|total|totals|sum|subtotal|net|gross|vat|tax|price|balance|originalAmount|[a-z][A-Za-z]*Amount)$/;
+/** Names of plain words below money (a payee's name or address): scrubbed as text, not left out. */
+const PLAIN_TEXT_KEY = /^(name|displayName|legalName|address|street|city|zip|postalCode|country|currency|email)$/;
 
 /**
  * Where JSON objects and arrays stand in a text: each span from an opening brace or bracket to the one that closes it,
@@ -443,12 +464,14 @@ export function scrub(value: unknown, depth = 0, key = '', inMoney = false, json
     // A resource's id is kept, also below a payee (a vendor's id there addresses the vendor), unless its own name
     // speaks of money.
     if (ID_KEY.test(key) && !namesMoney(key) && ID_VALUE.test(value)) return value;
-    if (inMoney && /\d/.test(value)) return undefined;
+    if (inMoney && /\d/.test(value) && !PLAIN_TEXT_KEY.test(key)) return undefined;
     return scrubText(value, depth, inMoney, jsonBudget);
   }
   if (Array.isArray(value)) return value.map(entry => scrub(entry, depth + 1, key, inMoney, jsonBudget)).filter(entry => entry !== undefined);
   if (typeof value === 'number') {
     if (ID_KEY.test(key) && !namesMoney(key) && Number.isSafeInteger(value)) return value;
+    // An amount stays a number: amounts are in minor units and may be long.
+    if (AMOUNT_KEY.test(key)) return value;
     if (inMoney) return undefined;
     // A card number may also come as a number. Above the safe integers the digits are no longer the ones that were
     // sent, so such a number is removed as it is.

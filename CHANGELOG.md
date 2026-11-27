@@ -46,6 +46,15 @@ review of 1.3.0:
   card numbers grouped by commas, and card numbers named as such ("PAN: …")
   are found; labels with typographic quotes or punctuation before the number
   too. `uuid` and `guid` fields are ids; `regNote` and `arabic` are kept.
+- HTML tags and comments are taken away and HTML and percent-encoding written
+  out before links and JSON are looked for, so neither hides behind them. A
+  link split by tabs or line breaks is read as a browser reads it. A relative
+  reference counts as a link when it starts at a root, ends in a file name with
+  an extension, or has a segment of twelve or more characters (or six with
+  letters and digits); "Travel/Transport" stays. BIC code fields and plural
+  clearing fields are left out; parenthesised labelled numbers and spaced
+  security codes are found. Amounts stay numbers, and a payee's name and
+  address stay text.
 - Fields whose names speak of a bank, a card, an account number, a routing,
   clearing or sort code, a security code or a payment instruction are left out,
   under any spelling (`accountNo`, `bankRoutingNumber`, `account.number`,

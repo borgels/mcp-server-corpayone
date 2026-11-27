@@ -365,6 +365,15 @@ describe('calls', () => {
           punctuated: 'Account number: \u201812345679\u2019; CVV / 456',
           regNote: 'ordinary',
           arabic: 'ar',
+          relExt: 'private/SECRETKEY7.pdf og (private/SECRETKEY8)',
+          tabScheme: 'ht\ttps:files.example/private/SECRETKEY9',
+          bicCode: 'NWBKGB2L',
+          category: 'Travel/Transport',
+          clearingCodes: ['1234'],
+          clearingNumbers: ['9876'],
+          parens: 'Account number: (12345670) og CVV: 7  8  9',
+          totalAmount: 100000000008,
+          payeeInfo: { payee: { id: 'V1', name: 'Supplier 24', address: 'Main Street 10' } },
           nestedHtml: 'https://x/a&amp;amp;amp;#63;sig&amp;amp;amp;#61;abc',
           dashLabel: 'Account number - 12345678',
           cardVerificationValue: '123',
@@ -407,6 +416,12 @@ describe('calls', () => {
     for (const piece of ['11223344', 'OPAQUEKEY', '0417', '4111,1111', '12345679', 'CVV / 456']) expect(company).not.toContain(piece);
     expect(company).toContain('"regNote":"ordinary"');
     expect(company).toContain('"arabic":"ar"');
+    for (const piece of ['SECRETKEY', 'NWBKGB2L', '"clearingCodes"', '"clearingNumbers"', '12345670', '7  8  9']) expect(company).not.toContain(piece);
+    expect(company).toContain('"totalAmount":100000000008');
+    expect(company).toContain('"payee":{"id":"V1","name":"Supplier 24","address":"Main Street 10"}');
+    expect(company).toContain('Travel/Transport');
+    const encodedKey = JSON.stringify(await gw.callTool('get_company', { '{&quot;bankAccount&quot;:&quot;12345678&quot;}': true }));
+    expect(encodedKey).not.toContain('12345678');
     for (const piece of ['sig%25%33%44', 'amp;#61', '"cardVerificationValue"', '"expiryMonth"', '"code":"123"', 'CVV: 123', '"accountingBank":{"number"']) {
       expect(company).not.toContain(piece);
     }

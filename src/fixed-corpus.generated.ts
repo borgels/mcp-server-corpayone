@@ -638,7 +638,7 @@ export const FIXED_CORPUS: readonly string[] = [
   "[nested too deep]",
   "[text removed]",
   "\\b(pan|card(?:\\s*(?:no\\.?|number|nr\\.?))?|kort(?:nummer|nr\\.?)?)([\\s\\u00a0:#.=/|\\-\"'\\u2018\\u2019\\u201c\\u201d]*)\\d(?:",
-  "\\b(reg(?:istrerings)?\\.?\\s*(?:nr|no)\\.?|registreringsnummer|konto(?:\\s*(?:nr\\.?|nummer|no\\.?))?|account(?:\\s*(?:no\\.?|number|nr\\.?|#))?|a\\/c(?:\\s*no\\.?)?|acct\\.?(?:\\s*no\\.?)?|sort\\s*code|routing(?:\\s*(?:no\\.?|number|code))?|bsb|aba)((?:\\s*\\([A-Z]{3}\\))?[\\s\\u00a0:#.=/|\\-\\u2010-\\u2015\\u2212\"'\\u2018\\u2019\\u201c\\u201d\\u00ab\\u00bb]*(?:(?:is|er|was|var)[\\s\\u00a0:\"'\\u2018\\u2019\\u201c\\u201d\\u00ab\\u00bb]+)?)\\d(?:",
+  "\\b(reg(?:istrerings)?\\.?\\s*(?:nr|no)\\.?|registreringsnummer|konto(?:\\s*(?:nr\\.?|nummer|no\\.?))?|account(?:\\s*(?:no\\.?|number|nr\\.?|#))?|a\\/c(?:\\s*no\\.?)?|acct\\.?(?:\\s*no\\.?)?|sort\\s*code|routing(?:\\s*(?:no\\.?|number|code))?|bsb|aba)((?:\\s*\\([A-Z]{3}\\))?[\\s\\u00a0:#.=/|()\\[\\-\\u2010-\\u2015\\u2212\"'\\u2018\\u2019\\u201c\\u201d\\u00ab\\u00bb]*(?:(?:is|er|was|var)[\\s\\u00a0:\"'\\u2018\\u2019\\u201c\\u201d\\u00ab\\u00bb]+)?)\\d(?:",
   "] is not a known gateway tool.",
   "^/v1/teams$",
   "^/v1/teams/[^/]+$",
