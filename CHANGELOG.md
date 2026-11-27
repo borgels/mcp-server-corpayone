@@ -19,7 +19,13 @@ review of 1.3.0:
   length and check digits, card numbers (12 to 19 digits passing Luhn, anywhere
   in a run of digits grouped by spaces, dots, slashes or dashes) and numbers
   named as an account ("Konto nr.", "Account number is …", "A/C") are removed.
-  All patterns run in linear time.
+  Card security codes and expiry fields are left out, also named in text
+  ("CVV: 123"). All patterns run in linear time; a query is looked for after
+  decoding nested HTML references and percent-encoding (also of single hex
+  digits), up to eight rounds, and a word still encoded after that is removed.
+- Money names are matched by the words of a field name (`bankAccount`,
+  `card_details`), so `discarded` or `companyId` are not taken for a card or an
+  account; only the exact accounting names are exempt.
 - Resource ids (`id`, `…Id`, `…Ids`, `…_id`, under a name that speaks of no
   bank, card or account) are kept as they are, and a successful result's text is
   made from its scrubbed data, so both say the same.

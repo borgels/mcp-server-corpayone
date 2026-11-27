@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { corpayToolCatalog, createCorpayGateway, type CorpayGatewayOptions } from '../src/gateway.js';
 import { visibleTexts } from '../src/key-admission.js';
+import { scrub } from '../src/corpay/gateway-tools.js';
 
 /** A made-up value that looks like a token, built when the test runs so no secret-like text stands in the source. */
 const fake = (seed: string, length = 32): string =>
@@ -319,6 +320,14 @@ describe('calls', () => {
           slashedCard: '4111/1111/1111/1111',
           spaced: 'Account number:         12345678',
           htmlPan: '&#52;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;&#49;',
+          perHex: 'https://x.example/a%25%33%46sig%25%33%44abcdef',
+          nestedHtml: 'https://x/a&amp;amp;amp;#63;sig&amp;amp;amp;#61;abc',
+          dashLabel: 'Account number - 12345678',
+          cardVerificationValue: '123',
+          cardDetails: { code: '123', expiryMonth: '12', expiryYear: '28' },
+          cvvText: 'CVV: 123',
+          accountingBank: { number: '12345678' },
+          discarded: { amount: 5000, id: '12345' },
 
           url: "https://files.example/bob's.pdf?Expires=2000000000&Signature=abc",
           gb29nwbk60161331926819: 3, card: 4111111111111111, big: 6221234567890598594, small: 42, '4111111111111111': 1, 'https://x.example/a?Signature=abc': 2 },
@@ -338,6 +347,10 @@ describe('calls', () => {
       expect(company).not.toContain(piece);
     }
     expect(company).toContain('https://public.example/report.pdf');
+    for (const piece of ['sig%25%33%44', 'amp;#61', '"cardVerificationValue"', '"expiryMonth"', '"code":"123"', 'CVV: 123', '"accountingBank":{"number"']) {
+      expect(company).not.toContain(piece);
+    }
+    expect(company).toContain('"discarded":{"amount":5000,"id":"12345"}');
     for (const piece of ['sig=abcdef', 'ik-s', '021000021', '"cardSecurityCode"', '"creditCard":{"number"', '567890', '4111/1111', '         12345678', '&#52;&#49;', 'sig%252525253D']) {
       expect(company).not.toContain(piece);
     }
@@ -357,12 +370,19 @@ describe('calls', () => {
     expect(invalid).not.toContain('Signature');
   });
 
+  it('looks for a query in linear time', () => {
+    const started = Date.now();
+    scrub({ note: '?'.repeat(200_000), other: `${'%25'.repeat(50_000)}3F` });
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
   it('keeps ids as they are, in the data and in the text alike', async () => {
-    const { impl } = stub({ 'GET /external/v1/teams/team-own': { data: { id: '4111111111111111', labelIds: ['label-4111111111111111'], cardId: '4111111111111111' } } });
+    const { impl } = stub({ 'GET /external/v1/teams/team-own': { data: { id: '4111111111111111', companyId: '4111111111111111', labelIds: ['label-4111111111111111'], cardId: '4111111111111111' } } });
     const result = await gateway(impl).callTool('get_company', {});
     const data = (result.structuredContent as { data: Record<string, unknown> }).data;
     expect(data.id).toBe('4111111111111111');
     expect(data.labelIds).toEqual(['label-4111111111111111']);
+    expect(data.companyId).toBe('4111111111111111');
     expect(data.cardId).toBe('[bank or card number removed]');
     expect(result.content[0]!.text).toContain('"id":"4111111111111111"');
   });
