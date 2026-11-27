@@ -39,6 +39,13 @@ review of 1.3.0:
   quotes and codes with dashes are found. An id name with an object below it
   keeps its money context; names over 10,000 characters count as money; short
   forms such as `accountNo` are matched as whole names, so `accountNote` stays.
+- JSON that cannot be read to the bottom (unmatched brackets, or more than
+  eight levels of JSON in JSON) is not looked through: its text is removed.
+  `https:` at the end of a word and relative references with a long last
+  segment count as links. IBANs with spaces in their first four characters,
+  card numbers grouped by commas, and card numbers named as such ("PAN: …")
+  are found; labels with typographic quotes or punctuation before the number
+  too. `uuid` and `guid` fields are ids; `regNote` and `arabic` are kept.
 - Fields whose names speak of a bank, a card, an account number, a routing,
   clearing or sort code, a security code or a payment instruction are left out,
   under any spelling (`accountNo`, `bankRoutingNumber`, `account.number`,

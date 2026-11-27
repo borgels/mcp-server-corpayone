@@ -356,6 +356,15 @@ describe('calls', () => {
           relativePath: '/private/SECRETKEY6',
           curly: 'CVV: \u201c987\u201d; Expiry: \u201c11/27\u201d; Security code: 1\u20132\u20133',
           accountNote: 'ordinary',
+          unmatched: '[unfinished {"bank":{"number":"11223344"}}',
+          controlScheme: 'https:\nfiles.example/private/OPAQUEKEY1',
+          relativeOne: 'private/OPAQUEKEY2',
+          relativeRoot: '/OPAQUEKEY3',
+          spacedIban: 'NL 91 ABNA 0417 1643 00',
+          commaPan: 'PAN: 4111,1111,1111,1111',
+          punctuated: 'Account number: \u201812345679\u2019; CVV / 456',
+          regNote: 'ordinary',
+          arabic: 'ar',
           nestedHtml: 'https://x/a&amp;amp;amp;#63;sig&amp;amp;amp;#61;abc',
           dashLabel: 'Account number - 12345678',
           cardVerificationValue: '123',
@@ -395,6 +404,9 @@ describe('calls', () => {
     expect(company).toContain('Café');
     for (const piece of ['SECRETKEY', '12340000', '43215678', '87650000', '987', '11/27', '1\u20132']) expect(company).not.toContain(piece);
     expect(company).toContain('"accountNote":"ordinary"');
+    for (const piece of ['11223344', 'OPAQUEKEY', '0417', '4111,1111', '12345679', 'CVV / 456']) expect(company).not.toContain(piece);
+    expect(company).toContain('"regNote":"ordinary"');
+    expect(company).toContain('"arabic":"ar"');
     for (const piece of ['sig%25%33%44', 'amp;#61', '"cardVerificationValue"', '"expiryMonth"', '"code":"123"', 'CVV: 123', '"accountingBank":{"number"']) {
       expect(company).not.toContain(piece);
     }
@@ -418,6 +430,12 @@ describe('calls', () => {
     expect(invalid).not.toContain('Signature');
   });
 
+  it('removes JSON it cannot read to the bottom', () => {
+    let note = JSON.stringify({ bank: { number: '12345678' } });
+    for (let i = 0; i < 9; i += 1) note = JSON.stringify({ text: note });
+    expect(JSON.stringify(scrub({ note }))).not.toContain('12345678');
+  });
+
   it('looks for a query and reads field names in linear time', () => {
     const started = Date.now();
     scrub({ note: '?'.repeat(200_000), other: `${'%25'.repeat(50_000)}3F`, ['A'.repeat(200_000)]: 1 });
@@ -425,12 +443,13 @@ describe('calls', () => {
   });
 
   it('keeps ids as they are, in the data and in the text alike', async () => {
-    const { impl } = stub({ 'GET /external/v1/teams/team-own': { data: { id: '4111111111111111', companyId: '4111111111111111', labelIds: ['label-4111111111111111'], cardId: '4111111111111111' } } });
+    const { impl } = stub({ 'GET /external/v1/teams/team-own': { data: { id: '4111111111111111', uuid: '00000000-0000-4000-8000-411111111111', companyId: '4111111111111111', labelIds: ['label-4111111111111111'], cardId: '4111111111111111' } } });
     const result = await gateway(impl).callTool('get_company', {});
     const data = (result.structuredContent as { data: Record<string, unknown> }).data;
     expect(data.id).toBe('4111111111111111');
     expect(data.labelIds).toEqual(['label-4111111111111111']);
     expect(data.companyId).toBe('4111111111111111');
+    expect(data.uuid).toBe('00000000-0000-4000-8000-411111111111');
     expect(data.cardId).toBe('[bank or card number removed]');
     expect(result.content[0]!.text).toContain('"id":"4111111111111111"');
   });

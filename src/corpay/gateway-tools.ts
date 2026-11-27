@@ -100,7 +100,7 @@ const shortText = (max: number) => z.string().trim().min(1).max(max);
 
 /** Field names (lower case, without separators) that speak of bank or card data: such a field is left out. */
 const HIDDEN_NAME =
-  /(iban|bban|bic$|swift|routing(no|nr|number|code)?s?$|^routing|sortcode|clearing(no|nr|number|code)?$|^transit(no|nr|number|code)?$|bsb$|^aba$|^cid$|cvv|cvc|cvn|csc|securitycode|verificationvalue|verificationcode|expiry|expiration|expdate|cardnumber|cardnos?$|carddetail|carddata|cardinfo|creditcard|debitcard|^cards?$|^pans?$|bankaccount|bankdetail|bankinfo|bankdata|banknumber|banknos?$|banknrs?$|bankcode|bankreg|^bank$|^banks$|accountnumber|accountnos?$|accountnrs?$|^accounts?$|^acct|kontonummer|kontonr|^konto$|registrationnumber|registreringsnummer|^reg(no|nr|number)|paymentinstruction|paymentmethod|paymentdetail)/;
+  /(iban|bban|^bics?$|swiftbic|swift|routing(no|nr|number|code)?s?$|^routing|sortcode|clearing(no|nr|number|code)?$|^transit(no|nr|number|code)?$|bsb$|^aba$|^cid$|cvv|cvc|cvn|csc|securitycode|verificationvalue|verificationcode|expiry|expiration|expdate|cardnumber|cardnos?$|carddetail|carddata|cardinfo|creditcard|debitcard|^cards?$|^pans?$|bankaccount|bankdetail|bankinfo|bankdata|banknumber|banknos?$|banknrs?$|bankcode|bankreg|^bank$|^banks$|accountnumber|accountnos?$|accountnrs?$|^accounts?$|^acct|kontonummer|kontonr|^konto$|registrationnumber|registreringsnummer|^reg(no|nr|number)s?$|paymentinstruction|paymentmethod|paymentdetail)/;
 /** The words of a name that speak of money held somewhere: an account, a bank, a card, a payee, a beneficiary. */
 const MONEY_WORDS: ReadonlySet<string> = new Set([
   'bank', 'banks', 'card', 'cards', 'account', 'accounts', 'acct', 'konto', 'konti', 'payee', 'payees', 'beneficiary', 'beneficiaries',
@@ -150,12 +150,12 @@ function namesMoney(name: string): boolean {
   return words.some(word => MONEY_WORDS.has(word)) || (words.length === 1 && MONEY_PREFIX.test(words[0]!));
 }
 /** Separators between the groups of a number: spaces, dots, slashes and dashes of any kind. */
-const SEP = '[\\s\\u00a0./\\-\\u2010-\\u2015\\u2212]';
+const SEP = '[\\s\\u00a0.,/\\-\\u2010-\\u2015\\u2212]';
 const SEPARATORS = new RegExp(SEP, 'g');
 /** A value of digits and separators only, of any length: below money, even a short one (a security code, a month). */
 const DIGITS = new RegExp(`^${SEP}*\\d(?:${SEP}*\\d)*${SEP}*$`);
 /** A key that names a resource's id. */
-const ID_KEY = /^(ids?|[a-z][A-Za-z0-9]*Ids?|[a-z][a-z0-9_]*_ids?)$/;
+const ID_KEY = /^(ids?|uuids?|guids?|[a-z][A-Za-z0-9]*Ids?|[a-z][a-z0-9_]*_ids?)$/;
 const ID_VALUE = /^[A-Za-z0-9_-]{1,100}$/;
 
 /** What stands where a link was: every link is removed, since any of them may carry a key. */
@@ -164,21 +164,23 @@ export const LINK_REMOVED = '[link removed]';
 export const SIGNED_LINK_REMOVED = LINK_REMOVED;
 export const NUMBER_REMOVED = '[bank or card number removed]';
 /** Where an IBAN may start: a country code and check digits, in capitals or not, whatever stands before it. */
-const IBAN_START = /[A-Z]{2}\d{2}/gi;
+const IBAN_START = new RegExp(`[A-Z]${SEP}?[A-Z]${SEP}*\\d${SEP}?\\d`, 'gi');
 /** The letters and digits that may follow, in groups. */
 const IBAN_REST = new RegExp(`^(?:${SEP}*[A-Z0-9]){11,30}`, 'i');
 /** A run of 12 or more digits, in groups or not and whatever stands next to it. */
 const CARD = new RegExp(`\\d(?:${SEP}*\\d){11,}`, 'g');
 /** A number named as an account or a sort code: "Reg.nr. 1234", "Konto 1234567890", "Account number is 12-34-56". */
 const LABELLED_ACCOUNT = new RegExp(
-  `\\b(reg(?:istrerings)?\\.?\\s*(?:nr|no)\\.?|registreringsnummer|konto(?:\\s*(?:nr\\.?|nummer|no\\.?))?|account(?:\\s*(?:no\\.?|number|nr\\.?|#))?|a\\/c(?:\\s*no\\.?)?|acct\\.?(?:\\s*no\\.?)?|sort\\s*code|routing(?:\\s*(?:no\\.?|number|code))?|bsb|aba)((?:\\s*\\([A-Z]{3}\\))?[\\s\\u00a0:#.=\\-\\u2010-\\u2015\\u2212"'\\u201c\\u201d]*(?:(?:is|er|was|var)[\\s\\u00a0:"'\\u201c\\u201d]+)?)\\d(?:${SEP}*\\d){3,}`,
+  `\\b(reg(?:istrerings)?\\.?\\s*(?:nr|no)\\.?|registreringsnummer|konto(?:\\s*(?:nr\\.?|nummer|no\\.?))?|account(?:\\s*(?:no\\.?|number|nr\\.?|#))?|a\\/c(?:\\s*no\\.?)?|acct\\.?(?:\\s*no\\.?)?|sort\\s*code|routing(?:\\s*(?:no\\.?|number|code))?|bsb|aba)((?:\\s*\\([A-Z]{3}\\))?[\\s\\u00a0:#.=/|\\-\\u2010-\\u2015\\u2212"'\\u2018\\u2019\\u201c\\u201d\\u00ab\\u00bb]*(?:(?:is|er|was|var)[\\s\\u00a0:"'\\u2018\\u2019\\u201c\\u201d\\u00ab\\u00bb]+)?)\\d(?:${SEP}*\\d){3,}`,
   'gi',
 );
 
 /** A card's security code named in text: "CVV: 123", "CVC2 456", "security code 1234". */
-const SECURITY_CODE = /\b((?:cvv2?|cvc2?|cvn|csc|cid)(?:\s*(?:code|kode|number|nr|no)\.?)?|security\s*code|sikkerhedskode|kontrolcifre)([\s\u00a0:#.=\-\u2010-\u2015"'\u2018\u2019\u201c\u201d\u00ab\u00bb]*(?:(?:is|er)[\s\u00a0:"'\u2018\u2019\u201c\u201d\u00ab\u00bb]+)?)\d(?:[\s\u00a0.\-\u2010-\u2015]?\d){2,3}(?!\d)/gi;
+const SECURITY_CODE = /\b((?:cvv2?|cvc2?|cvn|csc|cid)(?:\s*(?:code|kode|number|nr|no)\.?)?|security\s*code|sikkerhedskode|kontrolcifre)([\s\u00a0:#.=/|\-\u2010-\u2015"'\u2018\u2019\u201c\u201d\u00ab\u00bb]*(?:(?:is|er)[\s\u00a0:"'\u2018\u2019\u201c\u201d\u00ab\u00bb]+)?)\d(?:[\s\u00a0.\-\u2010-\u2015]?\d){2,3}(?!\d)/gi;
+/** A card number named in text: "PAN: 4111 …", "Card number 4111-…": any 12 or more digits after it. */
+const LABELLED_CARD = new RegExp(`\\b(pan|card(?:\\s*(?:no\\.?|number|nr\\.?))?|kort(?:nummer|nr\\.?)?)([\\s\\u00a0:#.=/|\\-"'\\u2018\\u2019\\u201c\\u201d]*)\\d(?:${SEP}*\\d){11,}`, 'gi');
 /** A card's expiry named in text: "Expiry: 12/28", "exp. 12-2028", "udløb 12/28". */
-const EXPIRY = /\b((?:expiry|expiration|exp\.?)(?:\s*(?:date|dato))?|udløb(?:sdato)?|gyldig til)([\s\u00a0:#.=\-\u2010-\u2015"'\u2018\u2019\u201c\u201d\u00ab\u00bb]*(?:(?:is|er)[\s\u00a0:"'\u2018\u2019\u201c\u201d\u00ab\u00bb]+)?)(?:\d{1,2}\s*[/.\-\u2010-\u2015]\s*\d{2,4}|\d{4}\s*[/.\-\u2010-\u2015]\s*\d{1,2})(?!\d)/gi;
+const EXPIRY = /\b((?:expiry|expiration|exp\.?)(?:\s*(?:date|dato))?|udløb(?:sdato)?|gyldig til)([\s\u00a0:#.=/|\-\u2010-\u2015"'\u2018\u2019\u201c\u201d\u00ab\u00bb]*(?:(?:is|er)[\s\u00a0:"'\u2018\u2019\u201c\u201d\u00ab\u00bb]+)?)(?:\d{1,2}\s*[/.\-\u2010-\u2015]\s*\d{2,4}|\d{4}\s*[/.\-\u2010-\u2015]\s*\d{1,2})(?!\d)/gi;
 
 /** Whether a run of digits passes the Luhn check, as every card number does. */
 function luhn(digits: string): boolean {
@@ -237,8 +239,9 @@ function withoutIbans(value: string): string {
   for (let found = IBAN_START.exec(value); found !== null; found = IBAN_START.exec(value)) {
     const start = found.index;
     IBAN_START.lastIndex = start + 1;
-    const rest = IBAN_REST.exec(value.slice(start + 4));
-    const length = rest ? ibanLength(value.slice(start, start + 4 + rest[0].length)) : 0;
+    const head = found[0].length;
+    const rest = IBAN_REST.exec(value.slice(start + head));
+    const length = rest ? ibanLength(value.slice(start, start + head + rest[0].length)) : 0;
     if (length === 0) continue;
     let end = start;
     for (let seen = 0; seen < length; end += 1) if (!new RegExp(SEP).test(value[end]!)) seen += 1;
@@ -306,7 +309,9 @@ function isLink(word: string): boolean {
   for (let round = 0; round < 8; round += 1) {
     // As a browser reads it: backslashes are slashes, and "https:/host" is "https://host".
     const read = text.replace(/\\/g, '/');
-    if (/:\/\/|\/\/[a-z0-9-]|(?:^|[^a-z0-9])www\.|(?:^|[^a-z0-9])(?:https?|ftp):\S|^\.{0,2}\/[^\s/]+\/\S/i.test(read)) return true;
+    if (/:\/\/|\/\/[a-z0-9-]|(?:^|[^a-z0-9])www\.|(?:^|[^a-z0-9])(?:https?|ftp):(?:\S|$)|^\.{0,2}\/[^\s/]+\/\S/i.test(read)) return true;
+    // A relative reference with a long last segment ("/KEY…", "private/KEY…"): a path that may carry a key.
+    if (read.includes('/') && /^\.{0,2}\/?(?:[\w.~-]+\/)?[\w~-]*[A-Za-z][\w~-]{5,}$/.test(read)) return true;
     const decoded = percentDecoded(htmlDecoded(text));
     if (decoded === text) return false;
     text = decoded;
@@ -364,6 +369,8 @@ function scrubText(original: string, depth = 0, inMoney = false, jsonBudget = 8)
       if (from > 0) return out + scrubText(unlinked.slice(from), depth, inMoney, 0);
     }
   }
+  // JSON that could not be read here (unmatched brackets, or past the budget) is not looked through: the text goes.
+  if (/\{\s*"[^"\n]{0,200}"\s*:/.test(unlinked)) return TEXT_REMOVED;
   // Then HTML references and percent-encoding are written out (also nested) and HTML tags taken away, so no number
   // hides behind them or is split by them.
   let value = unlinked;
@@ -375,6 +382,7 @@ function scrubText(original: string, depth = 0, inMoney = false, jsonBudget = 8)
   value = withoutQueries(withoutComments(value).replace(/<\/?[a-z][^<>]{0,500}>/gi, ''));
   return withoutIbans(value)
     .replace(LABELLED_ACCOUNT, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
+    .replace(LABELLED_CARD, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(SECURITY_CODE, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(EXPIRY, (_match, label: string, gap: string) => `${label}${gap}${NUMBER_REMOVED}`)
     .replace(CARD, run => (holdsCardNumber(run) ? NUMBER_REMOVED : run));
