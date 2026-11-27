@@ -764,3 +764,32 @@ describe('typed answers: the edges, eighth round', () => {
     }
   });
 });
+
+describe('typed answers: the edges, ninth round', () => {
+  it('removes a link whole when it holds a double quote or an angle bracket', async () => {
+    const value = ['Se https://pay.example/invoice?file=O"Reilly&Sig', 'nature=PRIVAT1 og https://pay.example/a<b&Sig', 'nature=PRIVAT2 her'].join('');
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'Se [link removed] og [link removed] her' }] });
+  });
+
+  it('removes a host under an abbreviation-like ending, and keeps only the listed abbreviations', async () => {
+    const value = 'A customer.nr B Reg.nr. og Kto.nr. C f.eks. D reg.nr/sti';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'A [link removed] B Reg.nr. og Kto.nr. C f.eks. D [link removed]' }] });
+  });
+
+  it('removes an IP address in another spelling inside a word', async () => {
+    const value = 'A ip=0177.0.0.1 B ip=0x7f000001 C 0177.0.0.1#PRIVAT D addr=2001:db8::1 E 12:34:56';
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value }] } } });
+    const result = await gateway(impl).callTool('get_expense', { expenseId: 'E1' });
+    expect(result.structuredContent).toMatchObject({ notes: [{ value: 'A [link removed] B [link removed] C [link removed] D [link removed] E 12:34:56' }] });
+  });
+
+  it('removes a named account number grouped with underscores', async () => {
+    const { impl } = stub({ 'GET /external/v3/expenses/E1': { data: { ...OWN_EXPENSE.data, notes: [{ id: 'N1', value: 'Account no. 1234_567890' }] } } });
+    const text = JSON.stringify(await gateway(impl).callTool('get_expense', { expenseId: 'E1' }));
+    for (const piece of ['1234', '567890']) expect(text).not.toContain(piece);
+  });
+});

@@ -17,8 +17,8 @@ its tools are unchanged.
   and so is an id or a code that holds an account or card number or a host
   name. A number of a trillion or more is left out, never turned into text.
 - Links are never passed on: attachment URLs, websites and logos are not
-  listed, and every word of a text that is or holds a link is replaced by
-  `[link removed]`, whole: a word with `//` or `www.`, a scheme of any
+  listed, and every word of a text (everything between two spaces) that is
+  or holds a link is replaced by `[link removed]`, whole: a word with `//` or `www.`, a scheme of any
   length with something after its colon (`https:`, `mailto:x`, `sms:1234`,
   `webcal:x`), a host name in any script (`t.co`, `example.com`,
   `customer.finance`, `faktura.pdf`, `xn--…`; a host name with a path
@@ -26,9 +26,10 @@ its tools are unchanged.
   number), an IPv6 address with or without brackets, a query
   (`?a=b`) or a path (`localhost/x`, `127.1/x`; also `faktura/kreditnota`,
   where a part between slashes is longer than four letters). Full-width and
-  ideographic dots count as dots. Common abbreviations such as `Reg.nr.`,
-  `f.eks.` and `e.g.`, and short words with a slash such as `A/S`, `kr/md`
-  and `27/11/2026`, stay, and so do times (`12:34:56`) and plain numbers
+  ideographic dots count as dots. A few listed abbreviations (`Reg.nr.`,
+  `Kto.nr.`, `CVR.nr.` …), abbreviations whose ending is no top-level domain
+  (`f.eks.`, `inkl.`) or a single letter (`e.g.`), and short words with a
+  slash such as `A/S`, `kr/md` and `27/11/2026`, stay, and so do times (`12:34:56`) and plain numbers
   (`127.1`), which are no links without a scheme, `//` or a path. In an
   error, links are removed whole before secrets are redacted. This holds for error answers too, and
   replaces the `[signed link removed]` marker of 1.3. The scan is linear in
@@ -38,8 +39,8 @@ its tools are unchanged.
 - A number or true/false that the secret redaction would turn into a marker
   is left out of the answer, so every field keeps its type.
 - The pattern scrub of bank and card numbers stays on free text, as an extra
-  guard; it now also finds card and named account numbers grouped with dots
-  or slashes.
+  guard; it now also finds card and named account numbers grouped with dots,
+  slashes or underscores.
 - `list_coding_options` passes on every label list (no longer the first 50).
 - A change answers with what was done, built from its own input and typed,
   never Corpay One's body; a new vendor is answered with the vendors Corpay

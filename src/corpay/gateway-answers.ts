@@ -30,8 +30,11 @@ const TAX_ID = /^[A-Za-z0-9 .-]{2,30}$/;
 /** Numbers at or above this are no amount or count Corpay One gives, and may be card numbers: they are left out. */
 const MAX_NUMBER = 1e12;
 export const LINK_REMOVED = '[link removed]';
-/** A word of a text: everything up to a space, a double quote or an angle bracket. A link is removed as a whole word. */
-const WORD = /[^\s"<>]+/g;
+/**
+ * A word of a text: everything up to a space. A link holds no space, so it is always within one word, and is removed
+ * as the whole word, quotes and angle brackets in it too.
+ */
+const WORD = /\S+/g;
 /** A scheme (a name that starts with a letter) and a colon with something right after it: https:, mailto:x, sms:1234. */
 const SCHEME = /(?:^|[^A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]*:[^:]/;
 /** A query in a word: a question mark and, before the next one, an equals sign. */
@@ -85,7 +88,7 @@ function isLink(original: string): boolean {
   // A path: a word with "/" is a link unless every part is short and plain ("A/S", "kr/md", "27/11/2026").
   if (word.includes('/') && !word.split('/').every(isShortPart)) return true;
   // An IP address in another spelling: IPv6 without brackets, IPv4 with leading zeros or as a hex number.
-  if (isIpSpelling(word)) return true;
+  for (const candidate of word.matchAll(IP_CANDIDATE)) if (isIpSpelling(candidate[0])) return true;
   for (const run of word.matchAll(HOST_RUN)) {
     // A path, a query or a fragment right after it makes it a host name, whatever it ends in.
     const next = word[(run.index ?? 0) + run[0].length];
@@ -107,14 +110,20 @@ function isHost(run: string, withPath: boolean): boolean {
   }
   const last = labels[labels.length - 1]!;
   if (!TOP_LABEL.test(last)) return false;
-  return withPath || !ABBREVIATION_END.has(last.toLowerCase());
+  if (withPath) return true;
+  const host = labels.join('.').toLowerCase();
+  return !ABBREVIATIONS.has(host) && !NOT_A_DOMAIN.has(last.toLowerCase());
 }
 
 /**
- * Endings of common Danish and English abbreviations written with a dot ("Reg.nr.", "f.eks."), none of them a
- * top-level domain: no host names, unless a path follows.
+ * Common Danish abbreviations written with a dot that end in a top-level domain (".nr"): these exact words only, and
+ * only without a path. "Reg.nr." stays readable, so the account number after it is still found and removed.
  */
-const ABBREVIATION_END = new Set(['nr', 'nrs', 'eks', 'inkl', 'ekskl', 'excl', 'evt', 'vedr', 'dvs', 'osv', 'tlf', 'pga', 'iflg', 'ifm', 'mht', 'etc']);
+const ABBREVIATIONS = new Set(['reg.nr', 'kto.nr', 'konto.nr', 'cvr.nr', 'se.nr', 'tlf.nr', 'ref.nr', 'fak.nr', 'fakt.nr', 'faktura.nr']);
+/** Endings of common abbreviations that are no top-level domain ("f.eks.", "m.fl.", "inkl."). */
+const NOT_A_DOMAIN = new Set(['eks', 'inkl', 'ekskl', 'excl', 'evt', 'vedr', 'dvs', 'osv', 'tlf', 'pga', 'iflg', 'ifm', 'mht', 'etc']);
+/** Where an IP address may stand in a word: letters, digits, dots, colons and a zone sign in a row. */
+const IP_CANDIDATE = /[0-9A-Za-z.:%]+/g;
 
 /**
  * Whether a word, punctuation around it aside, is an IP address in a spelling other than the plain dotted one: IPv6

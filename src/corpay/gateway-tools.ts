@@ -95,7 +95,7 @@ const IBAN_START = /[A-Z]{2}\d{2}/gi;
 const IBAN_REST = /^(?:[\s\u00a0]*[A-Z0-9]){11,30}/i;
 /** A domestic account or sort code named as one in the text: "Reg.nr. 1234", "Konto 1234567890", "Account no. 12-34-56". */
 const LABELLED_ACCOUNT =
-  /\b(reg(?:istrerings)?\.?\s*nr\.?|registreringsnummer|konto(?:nr\.?|nummer)?|account(?:\s*(?:no\.?|number|nr\.?))?|acct\.?(?:\s*no\.?)?|sort\s*code|routing(?:\s*(?:no\.?|number))?|bsb|aba)([\s\u00a0:#.=-]*)\d[\d\s\u00a0./-]{2,}\d/gi;
+  /\b(reg(?:istrerings)?\.?\s*nr\.?|registreringsnummer|konto(?:nr\.?|nummer)?|account(?:\s*(?:no\.?|number|nr\.?))?|acct\.?(?:\s*no\.?)?|sort\s*code|routing(?:\s*(?:no\.?|number))?|bsb|aba)([\s\u00a0:#.=-]*)\d[\d\s\u00a0./_-]{2,}\d/gi;
 /** A run of 13 or more digits, in groups or not and whatever stands next to it: it holds a card number when part of it passes the Luhn check. */
 const CARD = /\d(?:[\s\u00a0._/-]*\d){12,}/g;
 export const NUMBER_REMOVED = '[bank or card number removed]';
